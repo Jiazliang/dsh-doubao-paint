@@ -2,6 +2,12 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.3.2] — 2026-11-07
+
+### 修复
+- 面板/工具读到的生图历史可能是旧快照：宿主内存在多个 apply 实例时，每个实例各持一份内存 `history`，只在 apply 时 hydrate 一次，新生成的图进不了 `/doubao-paint/status` 的响应（真机：`.history.json` 已有 4 条，接口只回 3 条）。
+- 现在 `/doubao-paint/status` 路由与 `doubao_image_status` 工具每次调用都先 `hydrateHistory()`，把 `.history.json` 合并进当前实例，面板与工具看到的是磁盘上的最新记录。
+
 ## [1.3.1] — 2026-11-07
 
 ### 修复

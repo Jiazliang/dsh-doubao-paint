@@ -390,6 +390,10 @@ v1.2 解决三件事：工具结果不再挤缩略图、命令能让模型先细
 生图完成后图卡派发 `dsh-doubao-paint:generated`（`window.dispatchEvent`），面板收到后重新拉
 `/doubao-paint/status` 更新 history——事件驱动，不轮询、不空转。
 
+**v1.3.2**：`/doubao-paint/status` 与 `doubao_image_status` 每次调用先 `hydrateHistory()`，把输出目录下的
+`.history.json` 合并进当前实例。宿主内可能同时存在多个 apply 实例（各自持一份内存 `history`），只在
+apply 时 hydrate 一次会让面板看到旧快照——真机上出现过「`.history.json` 已有 4 条、接口只回 3 条」。
+
 ## 7. 目录（已落盘的实际结构）
 
 ```
