@@ -584,8 +584,16 @@ test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale',
       },
     },
   );
-  assert.equal(payload.code, 200);
-  assert.equal(payload.body.ok, true);
+  // 后端可用才算 200：CI 裸机既没有 ego lite 也没有 chrome-devtools，会走 503，
+  // 因此这里断言「二选一且自洽」，而不是写死 200（本机装了 ego 才恒为 200）。
+  assert.equal([200, 503].includes(payload.code), true, `status 路由返回了 ${payload.code}`);
+  if (payload.code === 503) {
+    assert.equal(payload.body.ok, false);
+    assert.equal(payload.body.code, 'backend_unavailable');
+  } else {
+    assert.equal(payload.body.ok, true);
+    assert.equal(payload.body.code, 'ok');
+  }
   assert.equal(payload.body.config.defaultAspectRatio, '16:9');
   assert.equal('taskName' in payload.body.config, false);
   assert.ok(payload.body.config.chromeCliPath.length > 0);
@@ -833,10 +841,11 @@ test('G10: ego 后端适配器（解析 / 路径探测 / 调用形态 / 无页�
   assert.equal(parseEgoPayload('just a banner', ''), null);
 
   // 2) 路径探测：env 覆盖 → 版本目录取最高 → 都没有则空串
+  //    期望路径必须用 `path.join` 拼（Linux 上 join 是 posix 语义，写死反斜杠会永远不匹配）
   const fakeExists = (set) => (p) => set.has(p);
   const root = 'C:\\Program Files\\Citro Labs\\ego lite\\Application';
-  const v7 = `${root}\\0.6.2.7\\ego-browser.exe`;
-  const v6 = `${root}\\0.6.2.6\\ego-browser.exe`;
+  const v7 = path.join(root, '0.6.2.7', 'ego-browser.exe');
+  const v6 = path.join(root, '0.6.2.6', 'ego-browser.exe');
   const envHit = resolveDefaultEgoCliPath({
     env: { DSH_EGO_CLI_PATH: 'C:\\custom\\ego-browser.exe' },
     platform: 'win32',
@@ -910,14 +919,16 @@ test('G11: 后端选择 — 公共默认 auto、ego 显式优先、chrome 可强
   // 面向他人的公共默认是 auto（探测到 ego 就用 ego，否则回落 chrome）
   assert.equal(normalizeConfig({}).browserBackend, 'auto');
   assert.equal(DEFAULT_BROWSER_BACKEND, 'auto');
-  // 本机装了 ego，所以 auto / 未指定 都会解析成 ego
-  assert.equal(resolveBrowserBackend({}), 'ego');
-  assert.equal(resolveBrowserBackend({ browserBackend: 'auto' }), 'ego');
-  assert.equal(resolveBrowserBackend({ browserBackend: 'chrome' }), 'chrome');
-  // ego 显式要求但探测不到 → 回落 chrome，而不是抛出（第二参注入探测器桩）
+  // 「探得到 ego 就用 ego」用探测器桩断言，避免把本机是否装了 ego 写进测试
+  assert.equal(resolveBrowserBackend({}, () => 'C:\\fake\\ego-browser.exe'), 'ego');
+  assert.equal(resolveBrowserBackend({ browserBackend: 'auto' }, () => 'C:\\fake\\ego-browser.exe'), 'ego');
+  assert.equal(resolveBrowserBackend({ browserBackend: 'chrome' }, () => 'C:\\fake\\ego-browser.exe'), 'chrome');
+  // ego 显式要求但探测不到 → 回落 chrome，而不是抛出
   assert.equal(resolveBrowserBackend({ browserBackend: 'ego' }, () => ''), 'chrome');
   assert.equal(resolveBrowserBackend({ browserBackend: 'auto' }, () => ''), 'chrome');
   assert.equal(resolveBrowserBackend({ browserBackend: 'ego', egoCliPath: 'C:\\ego\\ego-browser.exe' }), 'ego');
+  // 未指定后端时只看真实探测结果，二选一即可（CI 裸机无 ego → chrome）
+  assert.equal(['ego', 'chrome'].includes(resolveBrowserBackend({})), true);
 
   const egoSession = createBrowserSession({ browserBackend: 'ego', doubaoUrl: 'https://www.doubao.com/chat/' });
   assert.equal(egoSession.backend, 'ego');
