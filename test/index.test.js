@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -27,6 +27,9 @@ import {
   isInsideDirectory,
   resolveImageRequest,
   resolveToolTimeoutMs,
+  buildHealthReport,
+  inspectOutputDir,
+  PLUGIN_VERSION,
   DEFAULT_BROWSER_BACKEND,
   PAINT_ERROR_CODES,
   PaintError,
@@ -56,6 +59,14 @@ import {
   parseEgoPayload,
   resolveDefaultEgoCliPath,
 } from '../lib/ego-cli.js';
+import {
+  HISTORY_FILENAME,
+  historyFilePath,
+  loadHistory,
+  mergeHistory,
+  pruneRunDirs,
+  saveHistory,
+} from '../lib/history.js';
 
 const noopCtx = { attachments: undefined };
 
@@ -1151,4 +1162,118 @@ test('G17: 页面结构漂移时返回 contract_changed 而不是超时', async 
   assert.equal(result.status, 'failed');
   assert.equal(result.code, 'contract_changed');
   assert.deepEqual(result.details.missingSelectors, ['loginButton', 'loginModal', 'inputEditor', 'sendButton']);
+});
+
+test('G18：history 持久化（落盘 / 读回 / 坏 JSON / 合并去重 / 上限）', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-history-'));
+  try {
+    const records = [
+      { filePath: path.join(dir, 'doubao_1.png'), filename: 'doubao_1.png', previewUrl: '/doubao-paint/file?path=x' },
+      { filePath: path.join(dir, 'doubao_2.png'), filename: 'doubao_2.png' },
+    ];
+    const saved = await saveHistory(dir, records);
+    assert.equal(saved.count, 2);
+    assert.equal(saved.filePath, historyFilePath(dir));
+    assert.ok(saved.filePath.endsWith(HISTORY_FILENAME));
+
+    const loaded = await loadHistory(dir);
+    assert.equal(loaded.length, 2);
+    assert.equal(loaded[0].filename, 'doubao_1.png');
+
+    // 坏 JSON 不应当让插件起不来
+    await writeFile(historyFilePath(dir), '{ not json', 'utf8');
+    assert.deepEqual(await loadHistory(dir), []);
+
+    // 合并：内存（新）优先，重复的 filePath 只留一份
+    const merged = mergeHistory(
+      [{ filePath: 'a.png', filename: 'a.png' }, { filePath: 'b.png', filename: 'b.png' }],
+      [{ filePath: 'b.png', filename: 'b.png' }, { filePath: 'c.png', filename: 'c.png' }],
+    );
+    assert.deepEqual(merged.map((item) => item.filename), ['b.png', 'c.png', 'a.png']);
+
+    // 上限
+    const many = Array.from({ length: 40 }, (_, index) => ({ filePath: `m${index}.png`, filename: `m${index}.png` }));
+    assert.equal(mergeHistory([], many).length, 30);
+    const capped = await saveHistory(dir, many);
+    assert.equal(capped.count, 30);
+    assert.equal((await loadHistory(dir)).length, 30);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('G19：.runs 保留策略（超出 keepRuns 整目录删除，窗口内保留截图数量）', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-runs-'));
+  const runs = path.join(dir, '.runs');
+  try {
+    const base = Date.now() - 60_000;
+    const names = ['r1', 'r2', 'r3', 'r4'];
+    for (let index = 0; index < names.length; index += 1) {
+      const runDir = path.join(runs, names[index]);
+      await mkdir(runDir, { recursive: true });
+      await writeFile(path.join(runDir, 'generation.png'), 'png', 'utf8');
+      await writeFile(path.join(runDir, '05-input.js'), 'script', 'utf8');
+      const stamp = new Date(base + index * 10_000);
+      await utimes(runDir, stamp, stamp);
+    }
+
+    // 保留最近 2 个目录、其中最近 1 个保留截图
+    const result = await pruneRunDirs(dir, { keepRuns: 2, keepScreenshots: 1 });
+    assert.equal(result.scanned, 4);
+    assert.deepEqual(result.removedDirs.sort(), ['r1', 'r2']);
+    assert.deepEqual(result.removedFiles, [path.join('r3', 'generation.png')]);
+
+    // r4 完整保留；r3 只丢了 png，脚本还在；r1/r2 整目录消失
+    assert.ok(await stat(path.join(runs, 'r4', 'generation.png')));
+    assert.ok(await stat(path.join(runs, 'r3', '05-input.js')));
+    await assert.rejects(stat(path.join(runs, 'r3', 'generation.png')));
+    await assert.rejects(stat(path.join(runs, 'r1')));
+
+    // 目录不存在时安全返回
+    const empty = await pruneRunDirs(path.join(dir, 'nope'));
+    assert.deepEqual(empty, { scanned: 0, removedDirs: [], removedFiles: [] });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('G20：环境体检（cli 缺失 / 输出目录不可写 / 全绿三态）', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-health-'));
+  try {
+    // 全绿：目录存在且可写、后端 CLI 在位
+    const healthy = buildHealthReport({
+      config: { outputDir: dir },
+      backend: 'ego',
+      version: '0.4.0',
+      ego: { path: 'C:\\fake\\ego-browser.exe', exists: true },
+      chrome: { path: '', exists: false },
+    });
+    assert.equal(healthy.ok, true);
+    assert.equal(healthy.backend, 'ego');
+    assert.equal(healthy.outputDir.exists, true);
+    assert.equal(healthy.outputDir.writable, true);
+    assert.equal(healthy.contract.selectors, 8);
+    assert.equal(healthy.contract.required, 4);
+    assert.equal(healthy.versions.plugin, '0.4.0');
+    assert.deepEqual(healthy.problems, []);
+
+    // 后端 CLI 缺失
+    const noCli = buildHealthReport({
+      config: { outputDir: dir },
+      backend: 'chrome',
+      ego: { path: '', exists: false },
+      chrome: { path: 'C:\\nope\\chrome-devtools.js', exists: false },
+    });
+    assert.equal(noCli.ok, false);
+    assert.equal(noCli.problems[0].code, 'cli_missing');
+    assert.equal(noCli.cli.exists, false);
+
+    // 输出目录不存在但父目录可写 → 仍算可写（会自建）
+    const nested = inspectOutputDir(path.join(dir, 'a', 'b'));
+    assert.equal(nested.exists, false);
+    assert.equal(nested.writable, true);
+    assert.ok(nested.path.endsWith(path.join('a', 'b')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

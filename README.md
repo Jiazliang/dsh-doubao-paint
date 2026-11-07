@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v0.3.0 — 离线验收 21/21 全绿、`npm run smoke` 通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 21/21（G1–G17 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、client 结构断言）；`lib/` 共 12 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）；鲁棒性与发布工程见 §6.7。
+**状态：v0.4.0 — 离线验收 24/24 全绿、`npm run smoke` 通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 24/24（G1–G20 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构断言）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）；鲁棒性与发布工程见 §6.7，P1 能力见 §6.8。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -305,6 +305,28 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 **⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，7 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
 
+## 6.8 P1 能力：history 持久化、`.runs` 保留策略、环境体检（v0.4，2026-11-07）
+
+**① history 跨进程持久化**（`lib/history.js`）：`history` 原来只活在模块内存里，宿主重启后面板「最近生成」永远是空的，且两个挂载实例各持一份。现在落到 `outputDir/.history.json`（`HISTORY_FILENAME`）：
+
+- `apply` 时读回（`loadHistory`）→ 与内存记录按 `filePath` / `filename` / `previewUrl` 去重合并（`mergeHistory`，内存优先）→ 灌进共享 `history`；
+- 每次生成 `status === 'succeeded'` 后覆盖写（`saveHistory`，原子写：临时文件 + `rename`），最多留 `MAX_HISTORY = 30` 条；
+- 坏 JSON、只读目录一律吞掉并当作「没有历史」——持久化失败不影响出图。
+
+**② `.runs` 保留策略**（`pruneRunDirs`）：每次请求的截图与调试脚本落在 `outputDir/.runs/<requestId>/`，长期会无上限堆积。`apply` 时按 mtime 排序：保留最近 **20** 个请求目录（更早的整目录删除），其中最近 **5** 个保留 png 截图，其余目录只删 png、保留脚本便于复现。
+
+**③ 环境体检**（`lib/health.js`）：`doubao_image_status` 与 `GET /doubao-paint/status` 的返回里多了 `health` 字段——
+
+| 字段 | 含义 |
+|---|---|
+| `health.ok` / `health.problems[]` | 是否可用；问题列表带 `code`（`cli_missing` / `download_failed`）+ 中文 `message` + `detail` |
+| `health.cli` | 当前后端的命令行路径与是否存在 |
+| `health.outputDir` | `{path, exists, writable, reason?}`；目录多层不存在时向上找最近祖先探权限（会被 `mkdir -p` 用到） |
+| `health.contract` | 契约表里的选择器总数与必需项数量 |
+| `health.versions` | 插件版本（`PLUGIN_VERSION`）与 Node 版本 |
+
+面板与 Agent 拿到 `health.problems[0].message` 就能直接告诉用户「缺什么、下一步做什么」，不用再猜 `cli_missing` 的来源。
+
 ## 7. 目录（已落盘的实际结构）
 
 ```
@@ -319,10 +341,12 @@ dsh-doubao-paint/
   lib/download.js       宿主侧下载、原子落盘、附件注入、history
   lib/errors.js         12 个状态码表、PaintError、classifyError、failureResult
   lib/contract.js       豆包页面选择器契约（8 选择器 + 2 特征）+ 缺失判定
+  lib/history.js        history 持久化（.history.json）+ .runs 保留策略
+  lib/health.js         环境体检（后端 CLI / 输出目录可写 / 契约 / 版本）
   lib/constants.js      比例 / 风格 / 默认值 / 超时预算 / 系统提示词（client 复用同一份）
   lib/client.js         触发条 + 面板（1057 行，自包含 IIFE + ModuleLoader）
   scripts/smoke.mjs     离线冒烟（7 项检查，CI 复用）
-  test/index.test.js    离线断言（node --test test/index.test.js，21 项）
+  test/index.test.js    离线断言（node --test test/index.test.js，24 项）
   .github/workflows/ci.yml  CI：测试 + 冒烟 + 打包内容检查
   locale/zh.json        配置项文案（11 字段）
   locale/en.json

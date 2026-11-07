@@ -76,6 +76,33 @@ await check('selector contract', () => {
   return `${ids.length} selectors`;
 });
 
+await check('health report', () => {
+  const report = mod.buildHealthReport({
+    config: { outputDir: 'doubao_images' },
+    backend: 'chrome',
+    version: mod.PLUGIN_VERSION,
+    chrome: { path: '/fake/chrome-devtools.js', exists: true },
+  });
+  if (report.ok !== true) throw new Error(`healthy fixture flagged: ${JSON.stringify(report.problems)}`);
+  if (report.contract.required !== 4) throw new Error('contract required count broken');
+  const missing = mod.buildHealthReport({
+    config: { outputDir: 'doubao_images' },
+    backend: 'ego',
+    ego: { path: '', exists: false },
+  });
+  if (missing.ok || missing.problems[0]?.code !== 'cli_missing') throw new Error('cli_missing not detected');
+  return `${report.outputDir.writable ? 'writable' : 'blocked'} / ${report.versions.plugin}`;
+});
+
+await check('history persistence', async () => {
+  const history = await import('../lib/history.js');
+  if (typeof history.saveHistory !== 'function') throw new Error('saveHistory missing');
+  if (history.DEFAULT_KEEP_RUNS < 1) throw new Error('retention window broken');
+  const merged = history.mergeHistory([{ filePath: 'a' }], [{ filePath: 'a' }, { filePath: 'b' }]);
+  if (merged.length !== 2 || merged[0].filePath !== 'a') throw new Error('merge order broken');
+  return `keep ${history.DEFAULT_KEEP_RUNS} runs / merge ${merged.length}`;
+});
+
 const failed = checks.filter((item) => !item.ok);
 const report = {
   ok: failed.length === 0,

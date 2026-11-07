@@ -6,8 +6,22 @@
 
 ### 计划（v1.0 收尾项）
 
-- P1：`history` 跨重启持久化、`.runs/` 保留策略、i18n 文案扩展、`partial` 结果在面板上的语义化展示；
-- P2：Linux/macOS 的 ego/chrome CLI 探测补齐、触发条无障碍（`aria-label` / 键盘激活）、`doubao_image_status` 结构化体检输出。
+- P1 剩余：错误码文案 i18n（`PAINT_ERROR_MESSAGES` 中英双份）、`partial` 结果在面板上的语义化展示；
+- P2：Linux/macOS 的 ego/chrome CLI 探测补齐、触发条无障碍（`aria-label` / 键盘激活）。
+
+## [0.4.0] — 2026-11-07
+
+### 新增
+
+- `lib/history.js`：history 跨进程持久化到 `outputDir/.history.json`（原子写、`MAX_HISTORY = 30`、坏 JSON 容错），`apply` 时读回并与内存记录按 `filePath` / `filename` / `previewUrl` 去重合并（`mergeHistory`，内存优先）。
+- `lib/history.js`：`.runs/<requestId>/` 保留策略 `pruneRunDirs` —— 保留最近 20 个请求目录，其中最近 5 个保留 png 截图，更早的整目录删除。
+- `lib/health.js`：环境体检 `buildHealthReport` / `inspectOutputDir`；`doubao_image_status` 与 `GET /doubao-paint/status` 的返回新增 `health`（`ok` / `problems[]` / `cli` / `outputDir` / `contract` / `versions`），`problems` 带 `code` + 中文 `message` + `detail`，面板与 Agent 可直接转述「缺什么、下一步做什么」。
+- `lib/constants.js`：`PLUGIN_VERSION`。
+
+### 变更
+
+- history 与 `.runs` 清理在 `apply` 时执行，生成成功后 `saveHistory`；持久化失败只影响「记住历史」，不影响出图。
+- `inspectOutputDir` 在目标目录多级不存在时向上寻找最近的已存在祖先探写权限（与 `mkdir -p` 行为对齐）。
 
 ## [0.3.0] — 2026-11-07
 
