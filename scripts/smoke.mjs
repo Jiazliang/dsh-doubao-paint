@@ -60,6 +60,22 @@ await check('error codes', () => {
   return `${errors.PAINT_ERROR_CODES.length} codes`;
 });
 
+await check('error messages i18n', () => {
+  const codes = errors.PAINT_ERROR_CODES;
+  for (const code of codes) {
+    const en = errors.PAINT_ERROR_MESSAGES_EN[code];
+    if (typeof en !== 'string' || en.length <= 3) throw new Error(`missing english message: ${code}`);
+  }
+  const en = errors.errorMessage('busy', 'en');
+  const zh = errors.errorMessage('busy', 'zh');
+  if (en === zh) throw new Error('english and chinese messages collapsed');
+  if (errors.errorMessage('busy', 'fr') !== zh) throw new Error('unknown lang should fall back to chinese');
+  if (errors.errorMessage('no-such-code', 'en') !== errors.PAINT_ERROR_MESSAGES_EN.unknown) {
+    throw new Error('unknown code should fall back to unknown message');
+  }
+  return `${codes.length} codes / en + zh`;
+});
+
 await check('page scripts', () => {
   const scripts = [page.buildProbeScript(), page.buildInputScript({ prompt: 'x' }), page.buildSendScript()];
   for (const script of scripts) {

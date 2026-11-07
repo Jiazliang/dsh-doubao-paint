@@ -32,8 +32,10 @@ import {
   PLUGIN_VERSION,
   DEFAULT_BROWSER_BACKEND,
   PAINT_ERROR_CODES,
+  PAINT_ERROR_MESSAGES_EN,
   PaintError,
   classifyError,
+  errorMessage,
 } from '../lib/index.js';
 import { sanitizeFilenamePrefix } from '../lib/prompt.js';
 import {
@@ -745,6 +747,23 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
   assert.equal(chipCollapsed.props['aria-expanded'], false);
   const chipText = chipCollapsed.props.children.map((child) => child?.props?.children ?? '').join('|');
   assert.ok(chipText.includes('豆包网页生图'), chipText);
+  // 无障碍：按钮化 + 可键盘激活 + 屏幕阅读器提示
+  assert.equal(chipCollapsed.props.role, 'button');
+  assert.equal(chipCollapsed.props.tabIndex, 0);
+  assert.match(String(chipCollapsed.props['aria-label'] || ''), /豆包网页生图工坊/);
+  assert.match(String(chipCollapsed.props.title || ''), /展开/);
+  assert.equal(typeof chipCollapsed.props.onKeyDown, 'function');
+  let prevented = false;
+  chipCollapsed.props.onKeyDown({
+    key: 'Enter',
+    preventDefault: () => {
+      prevented = true;
+    },
+  });
+  assert.equal(prevented, true, 'Enter 必须 preventDefault，避免触发表单提交');
+  assert.equal(moduleApi.getSessionStore('session-1').getSnapshot().expanded, true, 'Enter 应展开面板');
+  moduleApi.getSessionStore('session-1').toggleExpanded();
+  assert.equal(moduleApi.getSessionStore('session-1').getSnapshot().expanded, false);
   assert.equal(dockFactory({ sessionId: 'session-1' }), null, '收起态 dock 槽不渲染任何节点');
 
   moduleApi.getSessionStore('session-1').toggleExpanded();
@@ -993,6 +1012,16 @@ test('G13: 结构化错误码 — 归类与结果三件套', async () => {
   assert.equal(classifyError(new Error('无法把提示词写入豆包输入框（{}）')), 'contract_changed');
   // 限流文案 → rate_limited
   assert.equal(classifyError(new Error('HTTP 429 Too Many Requests')), 'rate_limited');
+
+  // 中英双语文案：每个 code 都有英文条目，未知语言回落中文，未知 code 回落 unknown
+  for (const code of PAINT_ERROR_CODES) {
+    assert.equal(typeof PAINT_ERROR_MESSAGES_EN[code], 'string', `missing en message: ${code}`);
+    assert.ok(PAINT_ERROR_MESSAGES_EN[code].length > 3, `en message too short: ${code}`);
+  }
+  assert.match(errorMessage('busy', 'en'), /already running/i);
+  assert.match(errorMessage('busy'), /已有一次生图任务/);
+  assert.match(errorMessage('busy', 'fr'), /已有一次生图任务/);
+  assert.equal(errorMessage('not-a-code', 'en'), PAINT_ERROR_MESSAGES_EN.unknown);
 
   // 编排器把异常收敛成 failed + code，而不是把异常抛给上层
   const abortChrome = {

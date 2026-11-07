@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v0.4.0 — 离线验收 24/24 全绿、`npm run smoke` 通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 24/24（G1–G20 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构断言）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）；鲁棒性与发布工程见 §6.7，P1 能力见 §6.8。
+**状态：v1.0.0 — 离线验收 24/24 全绿、`npm run smoke`（10 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 24/24（G1–G20 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -303,7 +303,7 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 **⑤ 超时预算统一**：`resolveToolTimeoutMs(config.timeoutMs)` 把工具超时按 `配置 + 30s` 夹到 `60s…300s`（120s 配置 → 150s 工具超时）；轮询内部只用 `timeoutMs × 0.85` 的预算，给截图、下载、附件注入留出余量；单图下载另有 `DOWNLOAD_TIMEOUT_MS = 45s` 并和外部 `AbortSignal` 合并。
 
-**⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，7 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
+**⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，10 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
 
 ## 6.8 P1 能力：history 持久化、`.runs` 保留策略、环境体检（v0.4，2026-11-07）
 
@@ -326,6 +326,18 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 | `health.versions` | 插件版本（`PLUGIN_VERSION`）与 Node 版本 |
 
 面板与 Agent 拿到 `health.problems[0].message` 就能直接告诉用户「缺什么、下一步做什么」，不用再猜 `cli_missing` 的来源。
+
+## 6.9 P1 尾巴与 P2 普适性（v1.0，2026-11-07）
+
+**① 错误码中英双语**（`lib/errors.js`）：除原有中文 `PAINT_ERROR_MESSAGES` 外新增 `PAINT_ERROR_MESSAGES_EN`（12 个 code 全覆盖，`unknown` 为 `Unexpected error.`），并用 `errorMessage(code, lang)` 统一取文案——`lang === 'en'` 走英文表、缺条目回落中文；其他语言一律中文；非枚举 code 归一到 `unknown`。`lib/index.js` 已再导出这两个符号。
+
+**② 面板文案 i18n 与 `partial` 语义化**（`lib/client.js`）：面板文案表扩到 23 键，新增 `err_<code>` 12 条与 `genPartial`；`t(ctx, key, vars)` 做占位替换、缺键回落中文、再缺回落键名；`errorText(ctx, code, fallback)` 把宿主错误码翻成面板可读文案。生成结果按状态分流：`succeeded` 报成功、`partial` 报「成功 N 张、失败 M 张」并以 warn 级别提示（不再把部分失败说成完全成功）、`login_required` 引导登录、其余按 `code` 给原因。历史遗留的 "Tabbit" 字样已全部清除。
+
+**③ 跨平台命令行探测**：`lib/ego-cli.js` 增加 `EGO_CLI_EXTRA_ROOTS`（macOS 的 `.app/Contents/MacOS`、Linux 的 `~/.local/share` / `/opt` / `/usr/lib`、Windows 用户级安装目录），并在 `PATH` 里逐目录兜底找 `ego-browser`；`lib/chrome-cli.js` 的非 Windows 分支改为遍历 npm 全局根（`npm_config_prefix`、`~/.npm-global`、`/usr/local`、`/opt/homebrew`、`~/.local/share/pnpm`、`/usr`），再回落 `~/.local/bin/chrome-devtools`。
+
+**④ 触发条无障碍**：`conversation.input.left` 的胶囊按钮补 `role="button"`、`tabIndex=0`、`aria-label`（随展开态切换「展开/收起」）、`title`、`onKeyDown`（Enter / Space 触发并 `preventDefault`），图标 `aria-hidden`，标签走 i18n。
+
+冒烟脚本同步加了 `error messages i18n` 一项（校验 12 个 code 都有英文条目、en/zh 不塌陷、未知语言回落中文、未知 code 回落 `unknown`），现共 **10 项**。
 
 ## 7. 目录（已落盘的实际结构）
 

@@ -4,10 +4,27 @@
 
 ## [Unreleased]
 
-### 计划（v1.0 收尾项）
+- 后续方向：豆包页面契约的自动巡检（定时探活 + 变更告警）、多账号/多标签并发配额、生成历史的面板筛选与检索。
 
-- P1 剩余：错误码文案 i18n（`PAINT_ERROR_MESSAGES` 中英双份）、`partial` 结果在面板上的语义化展示；
-- P2：Linux/macOS 的 ego/chrome CLI 探测补齐、触发条无障碍（`aria-label` / 键盘激活）。
+## [1.0.0] — 2026-11-07
+
+### 新增
+
+- `lib/errors.js`：`PAINT_ERROR_MESSAGES_EN`（12 个 code 全量英文文案）与 `errorMessage(code, lang)`——`en` 取英文、缺条目回落中文、未知语言中文、未知 code 归一 `unknown`。
+- `lib/client.js`：面板文案表扩到 23 键（含 12 条 `err_<code>` 与 `genPartial`），新增 `currentLang(ctx)` / `t(ctx, key, vars)` / `errorText(ctx, code, fallback)`。
+- `lib/ego-cli.js`：`EGO_CLI_EXTRA_ROOTS` 补 macOS/Linux/用户级安装目录，并在 `PATH` 逐目录兜底探测。
+- `lib/chrome-cli.js`：非 Windows 分支遍历 npm 全局根（`npm_config_prefix`、`~/.npm-global`、`/usr/local`、`/opt/homebrew`、`~/.local/share/pnpm`、`/usr`）后回落 `~/.local/bin/chrome-devtools`。
+- `scripts/smoke.mjs`：新增 `error messages i18n` 检查（共 10 项）。
+
+### 变更
+
+- 面板生成结果按状态分流：`succeeded` / `partial`（成功 N 张、失败 M 张，warn 级）/ `login_required` / 其他按 `code` 给原因；"Tabbit" 字样全部清除。
+- 触发条无障碍：`role="button"`、`tabIndex=0`、`aria-label` 随展开态切换、`title`、Enter / Space 键盘激活、图标 `aria-hidden`。
+- `PLUGIN_VERSION` 与 `package.json` 版本升至 `1.0.0`。
+
+### 说明
+
+- v1.0.0 的判据：P0 全清（v0.3.0）、P1 全清（v0.4.0 + 本版 i18n / `partial`）、P2 全清（跨平台探测 + a11y）、离线 24/24 与冒烟 10 项全绿、真机 ego 后端出图通过。
 
 ## [0.4.0] — 2026-11-07
 
