@@ -930,7 +930,12 @@ test('G11: 后端选择 — 公共默认 auto、ego 显式优先、chrome 可强
   // 未指定后端时只看真实探测结果，二选一即可（CI 裸机无 ego → chrome）
   assert.equal(['ego', 'chrome'].includes(resolveBrowserBackend({})), true);
 
-  const egoSession = createBrowserSession({ browserBackend: 'ego', doubaoUrl: 'https://www.doubao.com/chat/' });
+  // 会话工厂同理：显式给出 egoCliPath，才不会在裸机（未装 ego）上被回落成 chrome
+  const egoSession = createBrowserSession({
+    browserBackend: 'ego',
+    egoCliPath: 'C:\\fake\\ego-browser.exe',
+    doubaoUrl: 'https://www.doubao.com/chat/',
+  });
   assert.equal(egoSession.backend, 'ego');
   assert.equal(typeof egoSession.finish, 'function');
   assert.equal(typeof egoSession.evaluate, 'function');
