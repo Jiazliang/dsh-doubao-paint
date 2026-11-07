@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "title": "豆包网页生图 Agent 工具",
+    "description": "向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生工具，优先用本机 ego lite（复用已登录 Profile 1）操控豆包网页版（doubao.com）提交生图提示词、选择比例与风格、自动优选 wm0 无水印 2.7K 超清原图落盘并作为多模态图像附件返回；ego 不可用时回落本机 Chrome（chrome-devtools-mcp CLI）。"
+  },
+  "config": {
+    "enabled": {
+      "title": "启用豆包网页生图工具插件",
+      "description": "开启后向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生生图工具。"
+    },
+    "browserBackend": {
+      "title": "浏览器后端",
+      "description": "ego 优先：用本机 ego lite 已登录的 Profile 1 直接点豆包（免扫码、无 Electron 解释器陷阱）；选 chrome 则走 chrome-devtools daemon + 独立 Chrome profile（需一次扫码登录）。auto 与 ego 同义：探测不到 ego 时自动回落 chrome。"
+    },
+    "egoCliPath": {
+      "title": "ego lite 可执行文件路径",
+      "description": "留空则自动扫描 C:\\Program Files\\Citro Labs\\ego lite\\Application\\<版本>\\ego-browser.exe 并取最高版本；也可用环境变量 DSH_EGO_CLI_PATH 覆盖。"
+    },
+    "chromeCliPath": {
+      "title": "chrome-devtools CLI 可执行文件路径",
+      "description": "用于操控 Chrome 的 chrome-devtools CLI 路径（留空则按平台自动解析：Windows 取 npm 全局目录下的 chrome-devtools.cmd，其余取 ~/.local/bin/chrome-devtools 或 PATH 中的 chrome-devtools）。"
+    },
+    "doubaoUrl": {
+      "title": "豆包网页版入口地址",
+      "description": "默认访问的豆包对话与生图页面 URL（默认 https://www.doubao.com/chat/）。"
+    },
+    "defaultAspectRatio": {
+      "title": "默认画面比例",
+      "description": "未显式指定比例时默认使用的生图画面比例（如 1:1、16:9、9:16、4:3、3:4）。"
+    },
+    "defaultStyle": {
+      "title": "默认视觉风格预设",
+      "description": "未显式指定风格时附加的默认视觉风格（留空或 auto 表示由提示词自行决定）。"
+    },
+    "outputDir": {
+      "title": "高清原图本地保存目录",
+      "description": "豆包生成图片下载后的本地保存目录（相对路径基于当前工作区解析，默认 doubao_images）。"
+    },
+    "timeoutMs": {
+      "title": "单次生图等待超时时间 (ms)",
+      "description": "等待豆包网页完成图像生成与高清原图下载的最大毫秒数（默认 120000，范围 30000~180000）。"
+    },
+    "keepTab": {
+      "title": "生图完成后保留豆包标签页",
+      "description": "开启后在生图结束时保留浏览器中的豆包标签页，便于连续追问改图或复用会话。"
+    },
+    "injectSystemPrompt": {
+      "title": "向 System Prompt 注入生图工具指引",
+      "description": "开启后向 Agent 系统提示词注入豆包网页生图工具使用说明，使模型在收到画图请求时优先自动调用。"
+    }
+  }
+}

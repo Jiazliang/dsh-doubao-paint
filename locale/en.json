@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "title": "Doubao Web Image Agent Tool",
+    "description": "Registers doubao_generate_image and doubao_image_status natively, driving Doubao Web (doubao.com) through the local ego lite Profile 1 by default, picking the watermark-free wm0 2.7K original, saving it locally and returning it as a multimodal image attachment; falls back to the local Chrome (chrome-devtools-mcp CLI) when ego is unavailable."
+  },
+  "config": {
+    "enabled": {
+      "title": "Enable Doubao Web Image Agent Tool",
+      "description": "Registers doubao_generate_image and doubao_image_status native tools for the Agent."
+    },
+    "browserBackend": {
+      "title": "Browser backend",
+      "description": "ego first: drive Doubao through the already signed-in ego lite Profile 1 (no QR scan, no Electron interpreter trap). chrome uses the chrome-devtools daemon with a dedicated Chrome profile (one QR scan required). auto behaves like ego: falls back to chrome when ego is not detected."
+    },
+    "egoCliPath": {
+      "title": "ego lite executable path",
+      "description": "Leave empty to auto-detect C:\\Program Files\\Citro Labs\\ego lite\\Application\\<version>\\ego-browser.exe (highest version). Can be overridden with the DSH_EGO_CLI_PATH environment variable."
+    },
+    "chromeCliPath": {
+      "title": "chrome-devtools CLI Executable Path",
+      "description": "Path to the chrome-devtools CLI (leave empty to auto-resolve the npm global chrome-devtools.cmd on Windows, or ~/.local/bin/chrome-devtools / chrome-devtools on PATH elsewhere)."
+    },
+    "doubaoUrl": {
+      "title": "Doubao Web Entry URL",
+      "description": "Target Doubao Web chat URL used for image generation (defaults to https://www.doubao.com/chat/)."
+    },
+    "defaultAspectRatio": {
+      "title": "Default Aspect Ratio",
+      "description": "Default aspect ratio when none is specified in the tool call (1:1, 16:9, 9:16, 4:3, 3:4)."
+    },
+    "defaultStyle": {
+      "title": "Default Visual Style Preset",
+      "description": "Default visual style appended when none is specified (leave empty or 'auto' for prompt-driven style)."
+    },
+    "outputDir": {
+      "title": "Local Output Directory",
+      "description": "Directory where downloaded high-resolution Doubao images are saved (relative paths resolve against the workspace, default: doubao_images)."
+    },
+    "timeoutMs": {
+      "title": "Generation Timeout (ms)",
+      "description": "Maximum time in milliseconds to wait for Doubao Web image generation and download (default 120000, range 30000–180000)."
+    },
+    "keepTab": {
+      "title": "Keep Doubao Tab Open After Generation",
+      "description": "When enabled, retains the Doubao browser tab after generation for follow-up edits and session reuse."
+    },
+    "injectSystemPrompt": {
+      "title": "Inject System Prompt Guidance",
+      "description": "Injects usage guidance into the Agent system prompt so the model automatically invokes doubao_generate_image when asked to draw."
+    }
+  }
+}
