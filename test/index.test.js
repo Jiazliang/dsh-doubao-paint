@@ -69,12 +69,16 @@ import {
   resolveDefaultEgoCliPath,
 } from '../lib/ego-cli.js';
 import {
+  backfillWorkspace,
+  groupHistoryByWorkspace,
   HISTORY_FILENAME,
   historyFilePath,
+  inferWorkspaceFromFilePath,
   loadHistory,
   mergeHistory,
   pruneRunDirs,
   saveHistory,
+  workspaceLabel,
 } from '../lib/history.js';
 
 const noopCtx = { attachments: undefined };
@@ -601,6 +605,25 @@ test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale',
   assert.equal(payload.body.presets.length, 8);
   assert.deepEqual(payload.body.history, []);
   assert.equal(payload.body.browserStatus, null);
+  // v1.4.0：按工作区分组 —— 空历史时 groups 为空数组，且回显请求里的 workspace
+  assert.equal(payload.body.workspace, '');
+  assert.deepEqual(payload.body.groups, []);
+
+  // 带 ?workspace= 时原样回显，供前端判定「当前工作区」
+  let wsPayload;
+  await statusRoute.handler(
+    { url: '/doubao-paint/status?workspace=' + encodeURIComponent('D:\\work\\proj-a'), on: () => {} },
+    {
+      writeHead: (code, headers) => {
+        wsPayload = { code, headers };
+      },
+      end: (body) => {
+        wsPayload.body = JSON.parse(body);
+      },
+    },
+  );
+  assert.equal(wsPayload.body.workspace, 'D:\\work\\proj-a');
+  assert.deepEqual(wsPayload.body.groups, []);
 
   // generate 路由拒绝非 POST
   const generateRoute = registered.routes.find((route) => route.path.endsWith('/generate'));
@@ -818,6 +841,80 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
   assert.equal(dockExpanded.props.className, 'dsh-dbimg-dock-wrap');
   assert.equal(dockExpanded.props['data-dsh-doubao-dock'], 'expanded');
   assert.equal(dockExpanded.props.children.props.className, 'dsh-dbimg-panel');
+
+  // ── 分组渲染：张数必须「显示多少就是多少」，且按工作区分区/折叠 ─────────
+  const collect = (root) => {
+    const nodes = [];
+    const walk = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      nodes.push(node);
+      if (node.props) walk(node.props.children);
+    };
+    walk(root);
+    return nodes;
+  };
+  const textOf = (root) =>
+    collect(root)
+      .map((node) => (node.props ? node.props.children : undefined))
+      .filter((value) => typeof value === 'string')
+      .join('|');
+
+  assert.doesNotMatch(
+    textOf(dockExpanded),
+    /唤醒豆包网页|重新唤起登录框/,
+    '未登录只提示文案，不提供专门的唤起按钮（2026-11-07 用户要求去掉）',
+  );
+
+  const sessionStore = moduleApi.getSessionStore('session-1');
+  const groupImages = Array.from({ length: 6 }, (_, index) => ({
+    id: `group-${index}`,
+    filename: `group-${index}.png`,
+    filePath: `D:\\work\\proj-a\\doubao_images\\group-${index}.png`,
+    previewUrl: `/doubao-paint/file?path=group-${index}.png`,
+    aspectRatio: '16:9',
+  }));
+  sessionStore.setGroups(
+    [
+      { key: 'D:\\work\\proj-a', label: 'proj-a', count: 6, latestAt: '', current: true, images: groupImages },
+      { key: 'D:\\work\\proj-b', label: 'proj-b', count: 9, latestAt: '', current: false, images: groupImages.slice(0, 2) },
+    ],
+    'D:\\work\\proj-a',
+  );
+
+  const groupedDock = dockFactory({ sessionId: 'session-1', session: { cwd: 'D:\\work\\proj-a' } });
+  const dockNodes = collect(groupedDock);
+  assert.equal(
+    dockNodes.filter((node) => node.type === 'img').length,
+    6,
+    '6 条历史必须渲染 6 个 img（v1.3.x 的 slice(0, 4) 只画 4 张）',
+  );
+  const groupHeads = dockNodes.filter(
+    (node) => node.type === 'button' && node.props['data-dsh-doubao-group'] !== undefined,
+  );
+  assert.equal(groupHeads.length, 2);
+  assert.equal(groupHeads[0].props['data-dsh-doubao-group'], 'D:\\work\\proj-a');
+  assert.equal(groupHeads[0].props['aria-expanded'], 'true', '当前工作区默认展开');
+  assert.equal(groupHeads[1].props['aria-expanded'], 'false', '其它工作区默认折叠');
+  assert.match(textOf(groupHeads[0]), /6 张/);
+  assert.match(textOf(groupHeads[0]), /当前工作区/);
+  assert.match(textOf(groupHeads[1]), /9 张/, '折叠组显示真实总数，不是已加载条数');
+
+  // 触发条徽标口径与面板一致：6 + 9 = 15
+  assert.match(textOf(chipFactory({ sessionId: 'session-1' })), /15 张/);
+
+  // 点击组头折叠当前组 → 图片全部收起，再点回来
+  groupHeads[0].props.onClick();
+  assert.equal(
+    collect(dockFactory({ sessionId: 'session-1', session: { cwd: 'D:\\work\\proj-a' } })).filter(
+      (node) => node.type === 'img',
+    ).length,
+    0,
+    '折叠后该组不再渲染图片',
+  );
 });
 
 // ── G9 其它纯函数 ───────────────────────────────────────────────────────────
@@ -1319,6 +1416,85 @@ test('G18：history 持久化（落盘 / 读回 / 坏 JSON / 合并去重 / 上�
   }
 });
 
+test('G18b：旧记录按 filePath 回填 workspace', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'doubao-backfill-'));
+  try {
+    const workspaceA = path.join(root, 'proj-a');
+    const workspaceB = path.join(root, 'proj-b');
+    const dirA = path.join(workspaceA, 'doubao_images');
+
+    // 纯函数：图片目录名等于输出目录名时才推断
+    assert.equal(inferWorkspaceFromFilePath(path.join(dirA, 'doubao_1.png')), workspaceA);
+    assert.equal(inferWorkspaceFromFilePath(path.join(root, 'elsewhere', 'doubao_1.png')), '');
+    assert.equal(inferWorkspaceFromFilePath(''), '');
+    assert.equal(inferWorkspaceFromFilePath(undefined), '');
+
+    // 已有 workspace 的记录保持不变，无 workspace 的按路径补齐
+    const backfilled = backfillWorkspace([
+      { filePath: path.join(dirA, 'doubao_1.png') },
+      { filePath: path.join(workspaceB, 'doubao_images', 'doubao_2.png') },
+      { filePath: path.join(dirA, 'doubao_3.png'), workspace: workspaceA },
+      { filePath: path.join(root, 'loose.png') },
+    ]);
+    assert.equal(backfilled[0].workspace, workspaceA);
+    assert.equal(backfilled[1].workspace, workspaceB);
+    assert.equal(backfilled[2].workspace, workspaceA);
+    assert.equal(backfilled[3].workspace, undefined);
+
+    // loadHistory 落盘再读回时自动回填（v1.3.x 存量记录的场景）
+    const saved = await saveHistory(dirA, [
+      { filePath: path.join(dirA, 'doubao_1.png'), filename: 'doubao_1.png' },
+      { filePath: path.join(workspaceB, 'doubao_images', 'doubao_2.png'), filename: 'doubao_2.png' },
+    ]);
+    assert.equal(saved.count, 2);
+    const loaded = await loadHistory(dirA);
+    assert.equal(loaded[0].workspace, workspaceA);
+    assert.equal(loaded[1].workspace, workspaceB);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('G18c：groupHistoryByWorkspace 分组、置顶、计数与截断', () => {
+  const wsA = 'D:\\work\\proj-a';
+  const wsB = 'D:\\work\\proj-b';
+  const mk = (id, workspace, createdAt) => ({ id, workspace, createdAt, previewUrl: `/doubao-paint/file?path=${id}` });
+  const list = [
+    mk('b1', wsB, '2026-11-07T10:00:00.000Z'),
+    mk('a1', wsA, '2026-11-07T09:00:00.000Z'),
+    mk('a2', wsA, '2026-11-07T09:30:00.000Z'),
+    mk('n1', '', '2026-11-07T08:00:00.000Z'),
+  ];
+
+  // 当前工作区置顶并标记 current，其余按时间倒序
+  const groups = groupHistoryByWorkspace(list, { currentWorkspace: wsA });
+  assert.equal(groups[0].key, wsA);
+  assert.equal(groups[0].current, true);
+  assert.equal(groups[0].label, 'proj-a');
+  assert.equal(groups[0].count, 2);
+  assert.deepEqual(groups[0].images.map((item) => item.id), ['a1', 'a2']);
+  assert.equal(groups[1].key, wsB);
+  assert.equal(groups[1].current, false);
+  assert.equal(groups[2].label, '未标记工作区');
+
+  // count 是真实总数，images 按 perGroupLimit 截断
+  const limited = groupHistoryByWorkspace(list, { currentWorkspace: wsB, perGroupLimit: 1 });
+  assert.equal(limited[0].key, wsB);
+  assert.equal(limited[0].count, 1);
+  assert.equal(limited[0].images.length, 1);
+  const wsAGroup = limited.find((group) => group.key === wsA);
+  assert.equal(wsAGroup.count, 2);
+  assert.equal(wsAGroup.images.length, 1);
+
+  // 空列表 / 非数组都安全
+  assert.deepEqual(groupHistoryByWorkspace([], { currentWorkspace: wsA }), []);
+  assert.deepEqual(groupHistoryByWorkspace(undefined), []);
+
+  // 标签取路径末段，去尾部分隔符
+  assert.equal(workspaceLabel('D:\\work\\proj-a\\'), 'proj-a');
+  assert.equal(workspaceLabel('   '), '未标记工作区');
+});
+
 test('G19：.runs 保留策略（超出 keepRuns 整目录删除，窗口内保留截图数量）', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'doubao-runs-'));
   const runs = path.join(dir, '.runs');
@@ -1671,4 +1847,55 @@ test('G25: submitPaintRequest 归一化缺省值，未登录时不落盘 history
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+test('G27: 状态条 15 秒后自动收回，loading 期间不排定', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'client.js' });
+  const buildModule = sandbox.__DSH_DOUBAO_PAINT_BUILD__;
+  const React = {
+    createElement: () => null,
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useEffect: () => {},
+    useLayoutEffect: () => {},
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useRef: (initial) => ({ current: initial }),
+    useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+  };
+  const jsxRuntime = { jsx: (type, props) => ({ type, props }), jsxs: (type, props) => ({ type, props }), Fragment: 'Fragment' };
+  const moduleApi = buildModule((id) => {
+    if (id === 'react') return React;
+    if (id === 'react/jsx-runtime') return jsxRuntime;
+    if (id === '@deepseek-ai/dsh-client-store') return { useStore: (store, selector) => selector(store.getSnapshot()) };
+    return {};
+  });
+
+  assert.equal(moduleApi.STATUS_TTL_MS, 15000);
+
+  let scheduled = null;
+  const timers = {
+    setTimeout: (fn, ms) => {
+      scheduled = { fn, ms };
+      return 7;
+    },
+    clearTimeout: () => {
+      scheduled = null;
+    },
+  };
+  const store = moduleApi.createDoubaoStudioStore(undefined, timers);
+
+  store.setLoginRequired(true, '请先输入生图画面描述词（Prompt）');
+  assert.ok(store.getSnapshot().statusMessage.includes('请先输入'));
+  assert.equal(scheduled.ms, 15000, '告警必须排定 15 秒收回');
+  scheduled.fn();
+  assert.equal(store.getSnapshot().statusMessage, '');
+  assert.equal(store.getSnapshot().loginRequired, false);
+
+  scheduled = null;
+  store.setLoading(true, '生图中…');
+  assert.equal(scheduled, null, 'loading 进行中的提示不排定收回');
+  store.setLoading(false, '✅ 成功', 'info');
+  assert.equal(scheduled.ms, 15000, 'loading 结束后的提示同样排定收回');
 });

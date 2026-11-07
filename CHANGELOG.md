@@ -2,6 +2,16 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。只记对外可见的变化；实现细节看代码与 `README.md`。
 
+## [1.4.0] — 2026-11-07
+
+- 修复：面板画廊只渲染前 4 张却按总数显示徽标（`history.slice(0, 4)`）——现在按分组渲染该组全部图片，徽标与分组张数都取真实总数。
+- 新增：面板历史按工作区分组。`history` 记录写入 `workspace`，`/doubao-paint/status` 与 `/generate` 返回 `groups`；当前工作区默认展开并置顶，其他工作区折叠；旧记录按 `filePath` 回填工作区，不再全部堆进「未标记工作区」。
+- 变更：「✨ 插入对话让 Agent 生图」改为插入技能手势 `/doubao-paint <描述>（比例：…，风格：…）`，与手打手势同一条路径，不再生成「请调用工具」的提示词。
+- 变更：面板改为与输入框卡片一致的圆角（`var(--dsw-radius-panel)` = 28px）和同宽对齐，不再窄一圈。
+- 变更：去掉面板头部「🌐 唤醒豆包网页 / 检查登录」与状态条「🔑 重新唤起登录框」两个按钮；未登录只显示提示文案（由 `/generate` 的 `login_required` 触发），不再要求用户点专门按钮。
+- 修复：面板状态条的 15 秒自动收回在无定时器环境（离线 vm 沙箱）下抛 `ReferenceError: setTimeout is not defined`，改为全程 `typeof` 守卫、按注入的 `timers` 取用。
+- 工具：新增 `scripts/sync-profile.mjs`（`npm run sync:profile`），把工作区代码按 SHA256 同步进 `~/.dsh/profiles/desktop/node_modules/dsh-doubao-paint` 副本；宿主加载的是副本而非源码，改完要「同步 + 重启」两步才生效。
+
 ## [Unreleased]
 
 - 后续方向：契约自动巡检（定时探活 + 变更告警）、多账号并发配额、面板历史筛选。
