@@ -564,7 +564,7 @@ test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale',
   assert.equal(status.timeoutMs, Math.max(60000, Math.round(normalizeConfig({}).timeoutMs / 2) + 20000));
   assert.deepEqual(
     registered.routes.map((route) => route.path).sort(),
-    ['/doubao-paint/file', '/doubao-paint/generate', '/doubao-paint/open', '/doubao-paint/status'],
+    ['/doubao-paint/clear', '/doubao-paint/file', '/doubao-paint/generate', '/doubao-paint/open', '/doubao-paint/status'],
   );
   for (const route of registered.routes) {
     assert.equal(route.kind, 'exact');
@@ -1934,4 +1934,91 @@ test('G27: 状态条 15 秒后自动收回，loading 期间不排定', async () 
   assert.equal(hostScheduled?.ms, 15000, '未注入 timers 时也必须用宿主的 setTimeout 排定收回');
   hostScheduled.fn();
   assert.equal(hostStore.getSnapshot().statusMessage, '', '未注入 timers 时提示同样会被清空');
+});
+
+// ── G28 按工作区清除 ────────────────────────────────────────────────────────
+function makeRouteReq(method, payload) {
+  const listeners = new Map();
+  const req = {
+    method,
+    url: '/doubao-paint/clear',
+    on(event, handler) {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(handler);
+      return req;
+    },
+  };
+  setImmediate(() => {
+    const chunk = Buffer.from(JSON.stringify(payload ?? {}), 'utf8');
+    for (const handler of listeners.get('data') || []) handler(chunk);
+    for (const handler of listeners.get('end') || []) handler();
+  });
+  return req;
+}
+
+async function callClearRoute(route, method, payload) {
+  const result = {};
+  await route.handler(makeRouteReq(method, payload), {
+    writeHead: (code, headers) => {
+      result.code = code;
+      result.headers = headers;
+    },
+    end: (body) => {
+      result.body = body ? JSON.parse(body) : undefined;
+    },
+  });
+  return result;
+}
+
+test('G28：清除只删指定工作区的记录与本地文件', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-clear-'));
+  const wsA = 'D:\\work\\proj-a';
+  const wsB = 'D:\\work\\proj-b';
+  const fileA1 = path.join(dir, 'doubao_a1.png');
+  const fileA2 = path.join(dir, 'doubao_a2.png');
+  const fileB1 = path.join(dir, 'doubao_b1.png');
+  try {
+    for (const file of [fileA1, fileA2, fileB1]) await writeFile(file, 'png');
+    await saveHistory(dir, [
+      { filePath: fileB1, filename: 'doubao_b1.png', workspace: wsB },
+      { filePath: fileA1, filename: 'doubao_a1.png', workspace: wsA },
+      { filePath: fileA2, filename: 'doubao_a2.png', workspace: wsA },
+    ]);
+
+    const { ctx, registered } = makeFakeHostCtx();
+    apply(ctx, { outputDir: dir });
+    const clearRoute = registered.routes.find((route) => route.path === '/doubao-paint/clear');
+    assert.ok(clearRoute, '必须注册 /doubao-paint/clear');
+
+    // 非 POST 一律 405：清除是不可回退操作，只认 POST
+    const notAllowed = await callClearRoute(clearRoute, 'GET', undefined);
+    assert.equal(notAllowed.code, 405);
+    assert.equal(notAllowed.body.ok, false);
+
+    const payload = await callClearRoute(clearRoute, 'POST', { workspace: wsA });
+    assert.equal(payload.code, 200);
+    assert.equal(payload.body.ok, true);
+    assert.equal(payload.body.workspace, wsA);
+    assert.equal(payload.body.removed, 2);
+    assert.equal(payload.body.filesRemoved, 2);
+
+    // 只删本组文件，别的组不受影响
+    assert.equal(existsSync(fileA1), false);
+    assert.equal(existsSync(fileA2), false);
+    assert.equal(existsSync(fileB1), true);
+
+    // 返回的分组里 wsA 消失、wsB 仍在且计数为 1
+    const keys = payload.body.groups.map((group) => String(group.key));
+    assert.equal(keys.some((key) => key.includes('proj-a')), false, `残留 proj-a 组：${keys.join(',')}`);
+    const wsBGroup = payload.body.groups.find((group) => String(group.key).includes('proj-b'));
+    assert.ok(wsBGroup);
+    assert.equal(wsBGroup.count, 1);
+
+    // 落盘同步：磁盘上只剩 wsB 那条
+    const onDisk = await loadHistory(dir);
+    assert.equal(onDisk.length, 1);
+    assert.equal(onDisk[0].workspace, wsB);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
