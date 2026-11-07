@@ -101,10 +101,26 @@
 
 HTTP 路由（端口随宿主）：`/doubao-paint/status`（`?probe=1` 时才真探页面）、`/open`、`/generate`（仅 POST）、`/file`（只服务 history 记录或 `outputDir` 内的图片，支持 `?id=` 或 `?path=`）。
 
+## 前置条件
+
+- **DSH 桌面版**：插件通过 `plugin_manager.install_bundle` 装进 desktop profile；`dsh plugin` 命令行管不了该 profile。
+- **本机浏览器**：ego lite（0.6.x，推荐）或 Chrome + 全局 `chrome-devtools-mcp`，二者任一能被探测到，否则 `/status` 返回 503 `backend_unavailable`。
+- **豆包账号已登录**：ego 复用其 `Profile 1`；Chrome 用持久 profile，首次需人工扫码一次。插件不会代填账号密码，也不保存登录凭证。
+- **网络**：需能访问 `www.doubao.com` 与生成图所在 CDN（`*.byteimg.com`）；企业代理/地区限制会让探针停在 `login_required` 或 `contract_changed`。
+- **磁盘**：默认输出目录 `<宿主 cwd>/doubao_images`（通常即 profile 目录），单张原图约 4–5 MB；`.runs/` 只保留最近 20 个请求。
+
+## 隐私与数据边界
+
+- 只驱动本机已登录的浏览器，凭据留在浏览器 profile 里，不经过插件代码，也不写进日志。
+- 发给豆包的内容就是你的 `prompt`（加上比例/风格后缀），与手动在豆包网页里打字等价。
+- 落盘位置由 `outputDir` 决定；`.history.json` 只记文件名、尺寸、工作区标签等元数据，不存图片内容本身。
+- HTTP 路由只监听本机；`/file` 只服务 `history` 记录或 `outputDir` 内的图片（`resolveImageRequest` + `isInsideDirectory`），不接受任意路径读取。
+- 会话内嵌图使用 `http://127.0.0.1:<port>/doubao-paint/file?...`，图片本身不上传到任何第三方。
+
 ## 验收
 
 ```powershell
-node --test test/index.test.js     # 30 项：纯函数、编排、路由、UI、契约、history、单飞锁
+node --test test/index.test.js     # 33 项：纯函数、编排、路由、UI、契约、history、单飞锁、状态条
 node scripts/smoke.mjs --offline   # 13 项：发布前冒烟，不碰浏览器
 npm pack --dry-run                 # 发布包不含内部文档
 ```
