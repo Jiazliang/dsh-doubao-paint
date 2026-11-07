@@ -10,14 +10,21 @@
 
 ## 安装
 
-```powershell
-# 1) 让 DSH 装上本插件（desktop profile 由应用独占，只能这样装）
-#    在 DSH 里执行 plugin_manager:
-#    action=install_bundle, target=file:D:/Projects/active/dsh-plugins/dsh-doubao-paint
+在 DSH 里执行 `plugin_manager`（desktop profile 由应用独占，装插件只走这个入口）。两种方式任选：
 
-# 2) 首次使用先登录豆包（后端为 chrome 时是有头窗口；ego 复用其 Profile）
-#    让插件打开登录页：
-#    doubao_image_status({ openLoginIfNeeded: true })
+```text
+# A. GitHub 直装（推荐，跟随 tag，可换版本号或 ref）
+action=install_bundle, target=github:Jiazliang/dsh-doubao-paint#v1.4.3
+
+# B. Release 包（离线可传阅，落到 Releases 的 .tgz）
+action=install_bundle, target=https://github.com/Jiazliang/dsh-doubao-paint/releases/download/v1.4.3/dsh-doubao-paint-1.4.3.tgz
+```
+
+装完重启 DSH（ESM 模块进程内只求值一次），然后首次登录豆包：
+
+```text
+# 后端为 chrome 时是有头窗口；ego 复用其已登录 Profile
+doubao_image_status({ openLoginIfNeeded: true })
 ```
 
 后端依赖（二者任一即可，插件会自己探测）：
