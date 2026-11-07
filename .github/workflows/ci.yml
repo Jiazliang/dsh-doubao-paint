@@ -20,15 +20,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 本插件**零运行时依赖**（peerDependencies 全由 DSH 宿主提供），仓库里也没有
+      # lockfile，因此不能开 `cache: npm`（setup-node 会因找不到锁文件直接失败），
+      # 也不需要 install 步骤。
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-          cache: npm
 
-      # 本插件没有运行时依赖（peerDependencies 由 DSH 宿主提供），
-      # 因此用 `npm ci || npm install` 兼容「有/无 lockfile」两种仓库形态。
-      - name: Install
-        run: npm ci || npm install
+      - name: Static checks (lint)
+        run: node scripts/check.mjs
 
       - name: Unit tests (offline)
         run: npm test
@@ -37,13 +37,11 @@ jobs:
         run: node scripts/smoke.mjs --offline
 
       - name: Pack contents (no internal docs)
-        run: npm pack --dry-run
-
-      - name: Package must not ship design docs
         shell: bash
         run: |
           npm pack --dry-run --json > pack.json
-          if grep -qE '设计方案|复刻清单|handoff' pack.json; then
+          if grep -qE '设计方案|复刻清单|handoff|ego-lite-兼容评估' pack.json; then
             echo "::error::发布包内含内部设计文档"
             exit 1
           fi
+          echo "pack ok"
