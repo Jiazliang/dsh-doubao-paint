@@ -1,9 +1,19 @@
 {
   "name": "dsh-doubao-paint",
-  "version": "0.1.0",
-  "description": "Doubao Web AI Image Generation Agent Tool plugin for DeepSeek Harness (豆包网页版 AI 生图 Agent 工具插件：向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生工具，通过本机 Chrome + chrome-devtools-mcp CLI 操控 doubao.com 文生图、自动优选 wm0 无水印 2.7K 超清原图落盘并作为多模态图像附件返回)",
+  "version": "0.2.0",
+  "description": "Doubao Web AI Image Generation Agent Tool plugin for DeepSeek Harness (豆包网页版 AI 生图 Agent 工具插件：向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生工具，优先用本机 ego lite、回落 Chrome + chrome-devtools-mcp，操控 doubao.com 文生图、自动优选 wm0 无水印 2.7K 超清原图落盘并作为多模态图像附件返回)",
   "type": "module",
   "main": "lib/index.js",
+  "author": "Jiazliang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jiazliang/dsh-doubao-paint.git"
+  },
+  "homepage": "https://github.com/Jiazliang/dsh-doubao-paint#readme",
+  "bugs": {
+    "url": "https://github.com/Jiazliang/dsh-doubao-paint/issues"
+  },
   "exports": {
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
@@ -16,8 +26,8 @@
     "locale",
     "cordis.patch.yml",
     "README.md",
-    "设计方案.md",
-    "复刻清单.md"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "node --test test/index.test.js"

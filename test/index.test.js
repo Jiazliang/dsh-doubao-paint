@@ -7,7 +7,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -24,6 +24,8 @@ import {
   extractDoubaoImageKey,
   filterGeneratedImageCandidates,
   pickImages,
+  isInsideDirectory,
+  resolveImageRequest,
 } from '../lib/index.js';
 import { sanitizeFilenamePrefix } from '../lib/prompt.js';
 import {
@@ -634,7 +636,7 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
     return makeStub();
   });
 
-  assert.equal(moduleApi.name, 'doubao-image');
+  assert.equal(moduleApi.name, 'doubao-paint');
   // vm 跨 realm 的数组原型与本 realm 不同，deepStrictEqual 会因原型不等而失败
   assert.deepEqual(Array.from(moduleApi.inject), ['locale']);
   assert.equal(moduleApi.ASPECT_RATIOS.length, 7);
@@ -709,10 +711,10 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
 
   // 触发条挂在工具行左侧槽（渲染在「工作区内修改」右侧同一行），展开面板挂在 dock 槽（对话框上方）
   assert.deepEqual(slots[0], 'conversation.input.left');
-  assert.equal(slots[1].id, 'doubao-image-studio-chip');
+  assert.equal(slots[1].id, 'doubao-paint-studio-chip');
   assert.equal(slots[1].order, 20);
   assert.deepEqual(slots[2], 'conversation.input.dock');
-  assert.equal(slots[3].id, 'doubao-image-studio-dock');
+  assert.equal(slots[3].id, 'doubao-paint-studio-dock');
   assert.equal(slots[3].order, -5);
   assert.ok(locales.some((entry) => entry.ns === 'plugin-config.doubao-paint'));
   assert.ok(effects.length >= 2);
@@ -883,4 +885,73 @@ test('G11: 后端选择 — ego 优先、chrome 可强制、探测不到回落',
   assert.equal(chromeSession.backend, 'chrome');
   assert.equal(typeof chromeSession.stop, 'function');
   assert.equal(typeof chromeSession.finish, 'undefined');
+});
+
+test('G12: /file 路由只服务 history 记录或 outputDir 内的图片', async () => {
+  const outputDir = await mkdtemp(path.join(tmpdir(), 'dsh-doubao-file-'));
+  try {
+    const inside = path.join(outputDir, 'inside.png');
+    const outsideDir = await mkdtemp(path.join(tmpdir(), 'dsh-doubao-outside-'));
+    const outside = path.join(outsideDir, 'secret.png');
+    await writeFile(inside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await writeFile(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const history = [
+      {
+        index: 1,
+        filePath: inside,
+        filename: 'inside.png',
+        attachment: { attachmentId: 'att-1' },
+      },
+    ];
+
+    const params = (query) => new URLSearchParams(query);
+
+    // id 命中 history 记录
+    assert.equal(
+      resolveImageRequest(params('id=att-1'), { history, outputDir }).filePath,
+      path.resolve(inside),
+    );
+    const byName = resolveImageRequest(params('id=inside.png'), { history, outputDir });
+    assert.equal(byName.filePath, path.resolve(inside));
+
+    // 未知 id
+    assert.deepEqual(resolveImageRequest(params('id=nope'), { history, outputDir }), {
+      status: 404,
+      error: 'Unknown image id',
+    });
+
+    // 完全没给参数
+    assert.deepEqual(resolveImageRequest(params(''), { history, outputDir }), {
+      status: 400,
+      error: 'Missing id or path',
+    });
+
+    // 相对路径拒绝
+    assert.deepEqual(resolveImageRequest(params('path=inside.png'), { history, outputDir }), {
+      status: 400,
+      error: 'Invalid file path',
+    });
+
+    // outputDir 内的绝对路径放行（重启后 history 为空也能预览自己的产物）
+    assert.equal(
+      resolveImageRequest(params(`path=${encodeURIComponent(inside)}`), { history: [], outputDir })
+        .filePath,
+      path.resolve(inside),
+    );
+
+    // 任意位置的图片一律 403（这条是公开发布的安全底线）
+    assert.deepEqual(
+      resolveImageRequest(params(`path=${encodeURIComponent(outside)}`), { history, outputDir }),
+      { status: 403, error: 'Path is outside the configured output directory' },
+    );
+
+    // 目录越界判断本身
+    assert.equal(isInsideDirectory(inside, outputDir), true);
+    assert.equal(isInsideDirectory(outputDir, outputDir), true);
+    assert.equal(isInsideDirectory(outside, outputDir), false);
+    assert.equal(isInsideDirectory(path.join(outputDir, '..', 'escape.png'), outputDir), false);
+  } finally {
+    await rm(outputDir, { recursive: true, force: true });
+  }
 });

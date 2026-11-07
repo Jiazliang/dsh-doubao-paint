@@ -3,7 +3,9 @@
 > 用你已登录的本机 Chrome，经 Google 官方 `chrome-devtools-mcp`，驱动豆包网页版生图。
 > 免 API Key、不依赖第三方浏览器、插件包仍在百 KB 级。
 
-**状态：Stage 1 已实现、离线验收 15/15 全绿、已装进 desktop profile、GUI 内直接出图跑通（DoD 五条全部达成）；2026-11-07 起浏览器后端默认走 ego lite（`browserBackend=ego`），失败回落 Chrome。** `node --test test/index.test.js` 15/15（G1–G11 + G5b，含 mock 浏览器下的成功/未登录/超时三条编排路径、scoped-ctx 服务读取、后端选择与 client 结构断言）；`lib/` 共 9 个模块 + `test/`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）。已知未收口：`status.history` 因宿主内残留双挂载实例暂为空，干净重启后消失（§6.4 末段）。
+**本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
+
+**状态：Stage 1 已实现、离线验收 16/16 全绿、已装进 desktop profile、GUI 内直接出图跑通（DoD 五条全部达成）；2026-11-07 起浏览器后端默认走 ego lite（`browserBackend=ego`），失败回落 Chrome。** `node --test test/index.test.js` 16/16（G1–G12 + G5b，含 mock 浏览器下的成功/未登录/超时三条编排路径、scoped-ctx 服务读取、后端选择、client 结构断言与 `/file` 路由收口）；`lib/` 共 10 个模块 + `test/`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -305,7 +307,40 @@ dsh-doubao-paint/
 2. **隔离性方向反转。** 若用 `--autoConnect`，MCP 能读默认 profile 的全部登录态（官方 README 自己写了 disclaimer）；用持久独立 profile 则没有这个问题——**推荐后者**。
 3. **多一个依赖。** 从「零 npm 依赖」变成依赖一个 Google 包，需要处理版本与 npx 冷启动。
 
-## 9. 文档索引
+## 9. 参考与致谢（Credits）
+
+### 9.1 参考插件
+
+| 项 | 值 |
+| --- | --- |
+| 项目名 | `dsh-doubao-image`（Doubao Web Image Studio） |
+| 作者 | [@xt765](https://github.com/xt765) |
+| 仓库 | <https://github.com/xt765/dsh-doubao-image> |
+| 与本项目关系 | **功能复刻 + 架构重构**。非官方分支，未经上游作者审核或背书，与其无隶属关系 |
+
+本项目的存在前提就是上游作者把「DSH 插件如何驱动豆包网页版生图」这件事跑通了。没有 `dsh-doubao-image` 的公开实现，本项目无从复刻。
+
+### 9.2 继承自上游的部分
+
+- **功能契约**：工具名 `doubao_generate_image` / `doubao_image_status`、参数表（`prompt` / `aspectRatio` / `style` / `negativePrompt` / `outputDir` / `filenamePrefix` / `maxImages` / `newConversation` / `keepTab`）、四条 `/…/{status,open,generate,file}` Web 路由、`conversation.input.dock` 面板形态；
+- **业务逻辑**：提示词装配（画图前缀判重 + 风格/比例后缀）、选图打分与去重（`/rc_gen_image/` 键、`wm0.png` 水印优先、宽高 ≥ 360 过滤）、下载落盘（带 `Referer` 与 UA）、附件注入与 `history` 上限 30；
+- **页面契约**：豆包网页版的 `data-testid` 选择器集合（`chat_input_input` / `chat_input_send_button` / `skill_bar_button_3` / `create_conversation_button` 等）与轮询跳出策略；
+- **设计文档结构**：`复刻清单.md` 的 A–G 对照表与 DoD 五条，源自上游功能面的逐项拆解。
+
+### 9.3 本项目重写的部分
+
+- **浏览器驱动层**：上游外包给 Tabbit + Playwright；本项目重写为两条可切换后端 —— `ego-lite`（`TaskSpace` / `page.evaluate` / `page.fetch({saveAs})`）与 `chrome-devtools-mcp` CLI（`evaluate_script` / `take_screenshot` / daemon 归属判定），见 `lib/ego-cli.js`、`lib/chrome-cli.js`；
+- **命名空间**：`doubao-image` → `doubao-paint`（配置 id、locale 命名空间、slot id `doubao-paint-studio-dock` / `doubao-paint-studio-chip`），避免与原插件在同一 profile 内冲突；
+- **新增约束**：`/doubao-paint/file` 只服务 `history` 记录或 `outputDir` 内的图片（P0 安全收口）、`browserBackend` 三值选择、任务结束 `finish({keep:[]})` 释放 ego 空间；
+- **测试**：`test/index.test.js` 的 G1–G12 全部为本项目新写（假 ctx / 假 DOM / 假浏览器 / 真实文件系统断言）。
+
+### 9.4 许可
+
+- 本项目代码以 **MIT** 发布（见 [LICENSE](LICENSE)）。
+- 上游仓库的许可证与署名要求**以上游仓库自身的 `LICENSE` 为准**；本仓库不复制、不改写上游许可条款。若上游要求特定署名形式，请在上游仓库确认后按需补充。
+- 商标与产品：豆包 / Doubao / 字节跳动 等名称与商标归其权利人所有，本项目为第三方非官方工具，仅通过用户已登录的浏览器界面操作其网页版。
+
+## 10. 文档索引
 
 - [复刻清单.md](复刻清单.md)：Stage 1 的逐项对照表（A 注册面 / B 配置 / C 工具 / D 业务逻辑 / E 页面流程 / F 产物与 UI / G 测试），含 DoD 与 Stage 2 候选
 - [设计方案.md](设计方案.md)：模块划分、配置 schema、工具 schema、执行时序、命令映射、决策记录、Stage 2 加固清单
