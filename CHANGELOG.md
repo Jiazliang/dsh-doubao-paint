@@ -4,8 +4,13 @@
 
 ## [Unreleased]
 
-- 文档：`README.md` 重写为「安装 / 用法 / 配置 / 状态码 / 架构 / 验收 / 限制」，删掉逐版本追加的实测流水；`CHANGELOG.md` 收敛为每条版本 1–3 行。移除代码落地前的内部设计稿（`设计方案.md`、`复刻清单.md`、`handoff.md`、`ego-lite-兼容评估.md`），代码注释里对它们的引用一并清掉。
 - 后续方向：契约自动巡检（定时探活 + 变更告警）、多账号并发配额、面板历史筛选。
+
+## [1.3.3] — 2026-11-07
+
+- 卫生：删除命令面残留的死代码（`lib/render.js` 只留 `renderToolResult`；`lib/orchestrator.js` 删掉零引用的 `getActiveRun`）。
+- 卫生：新增 `npm run lint`（`scripts/check.mjs`，无依赖：语法、JSON、发布面存在性、遗留标记、命令面不回潮）并纳入 `npm run verify`；补 `.editorconfig` 与 `.gitattributes`（统一 LF）。
+- 文档：`README.md` 重写为「安装 / 用法 / 配置 / 状态码 / 架构 / 验收 / 限制」，删掉逐版本追加的实测流水；`CHANGELOG.md` 收敛为每条版本 1–3 行。移除代码落地前的内部设计稿（`设计方案.md`、`复刻清单.md`、`handoff.md`、`ego-lite-兼容评估.md`），代码注释里对它们的引用一并清掉。
 
 ## [1.3.2] — 2026-11-07
 
