@@ -44,7 +44,10 @@ import {
   renderCommandResult,
   encodeCommandPayload,
   decodeCommandPayload,
+  decodeRelayPayload,
+  renderRelayResult,
   PAINT_COMMAND_NAME,
+  PAINT_DIRECT_COMMAND_NAME,
   parseCommandArgs,
   registerPaintCommand,
   PAINT_SKILL,
@@ -377,8 +380,8 @@ test('G5: executeDoubaoAction 成功路径落盘/附件/历史/render', async ()
 
   const blocks = renderDoubaoToolOutput(outcome);
   assert.equal(blocks[0].type, 'text');
-  assert.equal(blocks.length, 2, '正文块 + 1 张图');
-  assert.equal(blocks[1].type, 'image');
+  // v1.2.0：工具结果只给文字摘要，图片改由 tool.call.toolview 图卡呈现
+  assert.equal(blocks.length, 1, '只保留正文块');
   assert.equal(JSON.parse(blocks[0].text).images[0].attachedToChat, true);
 
   await rm(dir, { recursive: true, force: true });
@@ -1435,14 +1438,32 @@ test('G22: /doubao-paint 命令注册、参数解析与执行', async () => {
   };
 
   registerPaintCommand(commands, run);
-  assert.equal(registered.length, 1);
-  const definition = registered[0];
-  assert.equal(definition.name, PAINT_COMMAND_NAME);
-  assert.equal(definition.name, 'doubao-paint');
-  assert.match(definition.description, /豆包/);
-  assert.ok(definition.input.hint.includes('--ratio'));
+  // v1.2.0：两条命令 —— /doubao-paint 转交模型，/doubao-paint-direct 零模型回合直出
+  assert.equal(registered.length, 2);
+  const relay = registered[0];
+  const direct = registered[1];
+  assert.equal(relay.name, PAINT_COMMAND_NAME);
+  assert.equal(relay.name, 'doubao-paint');
+  assert.equal(direct.name, PAINT_DIRECT_COMMAND_NAME);
+  assert.equal(direct.name, 'doubao-paint-direct');
+  assert.match(relay.description, /模型/);
+  assert.ok(relay.input.hint.includes('--ratio'));
 
-  const ok = await definition.handler({ rawInput: '  一只猫 --ratio 16:9 --style cyberpunk --count 2 --neg 文字 --reuse  ', attachments: [] });
+  const relayed = await relay.handler({
+    rawInput: '  一只猫 --ratio 16:9 --style cyberpunk --count 2 --neg 文字 --reuse  ',
+    attachments: [],
+  });
+  assert.equal(relayed.kind, 'success');
+  assert.match(relayed.text, /已转交模型：一只猫/);
+  const relayPayload = decodeRelayPayload(relayed.text);
+  assert.notEqual(relayPayload, null);
+  assert.match(relayPayload.instruction, /doubao_generate_image/);
+  assert.match(relayPayload.instruction, /一只猫（比例：16:9，风格：cyberpunk）/);
+  // 转交命令自己不生图
+  assert.equal(calls.length, 0);
+
+  const directArgs = { rawInput: '一只猫 --ratio 16:9 --style cyberpunk --count 2 --reuse', attachments: [] };
+  const ok = await direct.handler(directArgs);
   assert.equal(ok.kind, 'success');
   assert.match(ok.text, /豆包生图：succeeded/);
   assert.notEqual(decodeCommandPayload(ok.text), null);
@@ -1451,7 +1472,7 @@ test('G22: /doubao-paint 命令注册、参数解析与执行', async () => {
     prompt: '一只猫',
     aspectRatio: '16:9',
     style: 'cyberpunk',
-    negativePrompt: '文字',
+    negativePrompt: undefined,
     outputDir: undefined,
     filenamePrefix: undefined,
     maxImages: 2,
@@ -1459,7 +1480,7 @@ test('G22: /doubao-paint 命令注册、参数解析与执行', async () => {
     keepTab: undefined,
   });
 
-  const empty = await definition.handler({ rawInput: '   ', attachments: [] });
+  const empty = await relay.handler({ rawInput: '   ', attachments: [] });
   assert.equal(empty.kind, 'error');
   assert.match(empty.text, /用法：\/doubao-paint/);
 
@@ -1587,6 +1608,120 @@ test('G24: client 注册 conversation.chat.commandview 并把命令尾行渲染�
 
   const running = CommandView({ node: { name: 'doubao-paint', outcome: null } });
   assert.equal(running.props['aria-busy'], true);
+
+  // v1.2.0：relay 命令把「先细化再调工具」的指令代用户送进输入框并发送
+  const draftCalls = [];
+  const inputActions = {
+    setDraft: (text) => draftCalls.push(['setDraft', text]),
+    persistDraft: () => draftCalls.push(['persistDraft']),
+    submit: () => draftCalls.push(['submit']),
+  };
+  const relayed = renderRelayResult({
+    prompt: '一只猫',
+    aspectRatio: '16:9',
+    style: 'cyberpunk',
+    instruction: '请先细化再调用 doubao_generate_image 生成图片：一只猫',
+  });
+  const relayView = CommandView({
+    node: { name: 'doubao-paint', outcome: { kind: 'success', text: relayed.text } },
+    inputActions,
+  });
+  const relayLine = relayView.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-relay');
+  assert.ok(relayLine, 'relay 命令必须渲染转交提示');
+  assert.match(relayLine.props.children, /转交/);
+
+  // 纯函数部分直接验：写草稿 → 持久化 → 提交（effect 在测试桩里不执行）
+  const instruction = '请先细化再调用 doubao_generate_image 生成图片：一只猫';
+  assert.equal(moduleApi.submitRelayInstruction(inputActions, instruction), true);
+  assert.deepEqual(draftCalls[0], ['setDraft', instruction]);
+  assert.equal(draftCalls.some((call) => call[0] === 'submit'), true);
+  // 没有 inputActions 时返回 false，卡片文案降级为「转交失败」
+  assert.equal(moduleApi.submitRelayInstruction(null, 'x'), false);
+});
+
+// ── G26 工具图卡（tool.call.toolview key=doubao_generate_image） ─────────────
+test('G26: client 注册 tool.call.toolview 并渲染图片/折叠详情/派发事件', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'client.js' });
+  const buildModule = sandbox.__DSH_DOUBAO_PAINT_BUILD__;
+
+  const React = {
+    createElement: () => null,
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useEffect: () => {},
+    useLayoutEffect: () => {},
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useRef: (initial) => ({ current: initial }),
+    useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+  };
+  const jsxRuntime = {
+    jsx: (type, props) => ({ type, props }),
+    jsxs: (type, props) => ({ type, props }),
+    Fragment: 'Fragment',
+  };
+  const moduleApi = buildModule((id) => {
+    if (id === 'react') return React;
+    if (id === 'react/jsx-runtime') return jsxRuntime;
+    if (id === '@deepseek-ai/dsh-client-store') return { useStore: (store, selector) => selector(store.getSnapshot()) };
+    return {};
+  });
+
+  const registrations = [];
+  const components = [];
+  const slots = {
+    inject: (name, factory) => factory(),
+    register: (config, component) => {
+      registrations.push(config);
+      components.push(component);
+      return () => {};
+    },
+  };
+  // client.js 跑在 vm 上下文里，`window` / `CustomEvent` 必须挂到 sandbox 上
+  const dispatched = [];
+  sandbox.window = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: (event) => dispatched.push(event),
+  };
+  sandbox.CustomEvent = class CustomEvent {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init && init.detail;
+    }
+  };
+
+  moduleApi.apply({ locale: { register: () => {}, current: () => 'zh' }, slots });
+
+  const registration = registrations.find((entry) => entry.name === 'tool.call.toolview');
+  assert.ok(registration, '必须注册 tool.call.toolview');
+  assert.equal(registration.key, 'doubao_generate_image');
+
+  const ToolView = components[registrations.indexOf(registration)];
+  assert.equal(typeof ToolView, 'function');
+
+  const running = ToolView({ phase: 'start', block: { callId: 'c1', content: [] } });
+  assert.equal(running.props['aria-busy'], true);
+  assert.equal(running.props['data-dsh-doubao-tool'], '1');
+
+  const settled = ToolView({
+    phase: 'result',
+    block: { callId: 'c1', isError: false, content: [{ type: 'text', text: JSON.stringify(makePaintOutcome()) }] },
+  });
+  const grid = settled.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-tool-grid');
+  assert.ok(grid, '成功结果必须渲染图片网格');
+  assert.equal(grid.props.children[0].props.children[0].props.src, '/doubao-paint/file?id=a.png');
+  const details = settled.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-tool-details');
+  assert.ok(details, '详细信息必须折叠在 details 里');
+  assert.equal(details.props.children[0].type, 'summary');
+  // 工具结果里不再有 image 块，图片只由这张图卡呈现；结束事件驱动 dock 刷新
+  assert.equal(moduleApi.emitGenerated(makePaintOutcome().images), true);
+  assert.equal(dispatched.some((event) => event.type === moduleApi.GENERATED_EVENT), true);
+
+  const failed = ToolView({ phase: 'result', block: { callId: 'c1', isError: true, error: { code: 'cli_missing' }, content: [] } });
+  assert.match(failed.props.className, /failed/);
 });
 
 

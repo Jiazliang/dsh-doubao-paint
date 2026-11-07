@@ -2,6 +2,30 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] — 2026-11-07
+
+### 新增
+
+- **工具结果图卡**：`lib/client.js` 注册 keyed slot `tool.call.toolview`（key = `doubao_generate_image`）。
+  工具调用在会话里单独渲染：状态行 + 提示词 + 图片网格，其余细节收进 `<details>`，默认折叠。
+- **命令改为转交模型**：`/doubao-paint` 不再自己生图，而是把「先细化提示词再调工具」的指令写进输入框并
+  自动提交（客户端代按发送），由模型接收后细化再调工具；`/doubao-paint-direct` 保留零模型回合的直连形态
+  （CLI / 远程终端用）。两条命令共用同一套参数解析。
+- `lib/render.js`：`renderRelayResult` / `encodeRelayPayload` / `decodeRelayPayload` / `buildRefineInstruction`
+  （转交载荷前缀 `doubao-paint:relay:v1 `）。
+- `lib/client.js`：生图结束时派发 `dsh-doubao-paint:generated` 事件，面板据此刷新 history（事件驱动，不轮询）。
+
+### 变更
+
+- **工具返回只保留文字**：`renderToolResult` 不再输出 `image` 块与截图兜底块——图片只由会话图卡与面板呈现，
+  工具结果负责给出可复制的详细信息（文件名、尺寸、路径、`previewUrl`）。
+- 命令图卡新增转交提示（「已转交模型…」），并复用 `inputActions`（`setDraft` → `persistDraft` → `submit`）。
+- `PLUGIN_VERSION` 与 `package.json` 版本升至 `1.2.0`；冒烟检查扩到 15 项（新增 `relay command`、`client slots`）。
+
+### 不变
+
+- 唯一入口 `submitPaintRequest`、统一 `PaintOutcome`、三条 HTTP 路由与 `/doubao-paint/file?id=` 收口保持不变。
+
 ## [1.1.1] — 2026-11-07
 
 ### 修复

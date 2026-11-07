@@ -9,6 +9,7 @@
  * 选择器契约表可用。任何一项失败 → 退出码 1。
  */
 import process from 'node:process';
+import { readFile } from 'node:fs/promises';
 
 const mod = await import('../lib/index.js');
 const page = await import('../lib/doubao-page.js');
@@ -156,6 +157,33 @@ await check('adapter parity', () => {
   if (tool.images.length !== command.images.length) throw new Error('image count mismatch');
   if (tool.outputDir !== command.outputDir) throw new Error('outputDir mismatch');
   return `status ${tool.status} / ${tool.images.length} image`;
+});
+
+await check('relay command', () => {
+  if (mod.PAINT_DIRECT_COMMAND_NAME !== 'doubao-paint-direct') throw new Error('direct command name broken');
+  const args = mod.parseCommandArgs('一只猫 --ratio 16:9');
+  const relayed = mod.renderRelayResult({
+    ...args,
+    style: 'auto',
+    maxImages: 4,
+    newConversation: true,
+    instruction: mod.buildRefineInstruction({ ...args, style: 'auto' }),
+  });
+  if (relayed.kind !== 'success') throw new Error('relay command kind broken');
+  const payload = mod.decodeRelayPayload(relayed.text);
+  if (!payload) throw new Error('relay payload did not round-trip');
+  if (!payload.instruction.includes('doubao_generate_image')) throw new Error('relay instruction missing tool name');
+  if (mod.decodeRelayPayload('no payload here') !== null) throw new Error('relay decoder too permissive');
+  return `${mod.PAINT_COMMAND_NAME} → relay / direct ${mod.PAINT_DIRECT_COMMAND_NAME}`;
+});
+
+await check('client slots', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  if (!source.includes('"conversation.chat.commandview"')) throw new Error('commandview slot registration missing');
+  if (!source.includes('"tool.call.toolview"')) throw new Error('toolview slot registration missing');
+  if (!source.includes('"dsh-doubao-paint:generated"')) throw new Error('generated event missing');
+  if (!source.includes('doubao_generate_image')) throw new Error('toolview key missing');
+  return 'commandview + toolview';
 });
 
 const failed = checks.filter((item) => !item.ok);

@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v1.1.1 — 离线验收 30/30 全绿、`npm run smoke`（13 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 30/30（G1–G25 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10。
+**状态：v1.2.0 — 离线验收 31/31 全绿、`npm run smoke`（15 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 31/31（G1–G26 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染、工具图卡与折叠详情）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10，v1.2 的图卡与转交模型见 §6.11。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -307,7 +307,7 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 **⑤ 超时预算统一**：`resolveToolTimeoutMs(config.timeoutMs)` 把工具超时按 `配置 + 30s` 夹到 `60s…300s`（120s 配置 → 150s 工具超时）；轮询内部只用 `timeoutMs × 0.85` 的预算，给截图、下载、附件注入留出余量；单图下载另有 `DOWNLOAD_TIMEOUT_MS = 45s` 并和外部 `AbortSignal` 合并。
 
-**⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，10 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
+**⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，15 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
 
 ## 6.8 P1 能力：history 持久化、`.runs` 保留策略、环境体检（v0.4，2026-11-07）
 
@@ -341,7 +341,7 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 **④ 触发条无障碍**：`conversation.input.left` 的胶囊按钮补 `role="button"`、`tabIndex=0`、`aria-label`（随展开态切换「展开/收起」）、`title`、`onKeyDown`（Enter / Space 触发并 `preventDefault`），图标 `aria-hidden`，标签走 i18n。
 
-冒烟脚本同步加了 `error messages i18n` 一项（校验 12 个 code 都有英文条目、en/zh 不塌陷、未知语言回落中文、未知 code 回落 `unknown`），现共 **10 项**。
+冒烟脚本同步加了 `error messages i18n` 一项（校验 12 个 code 都有英文条目、en/zh 不塌陷、未知语言回落中文、未知 code 回落 `unknown`），现共 **15 项**（v1.2 追加 `relay command` 与 `client slots`）。
 
 ## 6.10 三个入口同一条通道（v1.1，2026-11-07）
 
@@ -375,6 +375,34 @@ submitPaintRequest(request, deps)          // 工具 execute / 命令 handler / 
 
 **⑥ 一致性可回归**：G21 把同一份 outcome 喂给两个适配器，断言 `status` / `outputDir` / 图片数完全相同；G24 在假 DOM 里渲染命令视图，断言图卡 `src` 与摘要不含载荷行。
 
+## 6.11 图卡与转交模型（v1.2，2026-11-07）
+
+v1.2 解决三件事：工具结果不再挤缩略图、命令能让模型先细化提示词、生图完成后面板自动刷新。
+
+### 6.11.1 工具结果 → 会话图卡
+
+- `lib/client.js` 注册 keyed slot **`tool.call.toolview`**（key = `doubao_generate_image`）。
+  这是宿主「按工具名分发」的工具视图槽，未占用时走内置行；占用后由本插件渲染。
+- 图卡内容：状态行（生图中 / 已生图 / 失败（code） / 没有图片）+ 提示词 + 图片网格（`img.src = previewUrl`）
+  + `<details>` 折叠的完整 JSON（默认收起）。图片走 `/doubao-paint/file?id=`，与命令图卡同一收口。
+- `renderToolResult` 因此**只输出文字块**：工具结果是给模型/终端看的详细信息，视觉呈现交给图卡。
+
+### 6.11.2 `/doubao-paint` 改为「转交模型」
+
+| 命令 | 行为 | 适用 |
+| --- | --- | --- |
+| `/doubao-paint <描述> [--ratio …]` | 命令只产出「先细化提示词再调工具」的指令，命令图卡用 `inputActions` 写进输入框并**自动提交**，由模型接收后细化再调工具 | 人在 Web UI 里想看模型补全后的效果 |
+| `/doubao-paint-direct <描述>` | 零模型回合，直接操控豆包网页生图 | CLI / 远程终端 / 脚本 |
+
+两条命令共用 `parseCommandArgs`（`--ratio` / `--style` / `--count` / `--neg` / `--dir` / `--prefix` / `--reuse`）。
+转交载荷前缀 `doubao-paint:relay:v1 `，与命令载荷 `doubao-paint:v1 ` 一样是尾行、人读摘要在前，
+终端里看不到「已转交」之外的实现细节。
+
+### 6.11.3 面板事件刷新
+
+生图完成后图卡派发 `dsh-doubao-paint:generated`（`window.dispatchEvent`），面板收到后重新拉
+`/doubao-paint/status` 更新 history——事件驱动，不轮询、不空转。
+
 ## 7. 目录（已落盘的实际结构）
 
 ```
@@ -393,8 +421,8 @@ dsh-doubao-paint/
   lib/health.js         环境体检（后端 CLI / 输出目录可写 / 契约 / 版本）
   lib/constants.js      比例 / 风格 / 默认值 / 超时预算 / 系统提示词（client 复用同一份）
   lib/client.js         触发条 + 面板（1057 行，自包含 IIFE + ModuleLoader）
-  scripts/smoke.mjs     离线冒烟（7 项检查，CI 复用）
-  test/index.test.js    离线断言（node --test test/index.test.js，24 项）
+  scripts/smoke.mjs     离线冒烟（15 项检查，CI 复用）
+  test/index.test.js    离线断言（node --test test/index.test.js，31 项）
   .github/workflows/ci.yml  CI：测试 + 冒烟 + 打包内容检查
   locale/zh.json        配置项文案（11 字段）
   locale/en.json
