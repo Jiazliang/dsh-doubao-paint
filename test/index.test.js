@@ -681,11 +681,40 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
   );
   assert.equal(moduleApi.STYLE_PRESETS.length, 8);
 
+  // 「✨ 插入对话让 Agent 生图」插入的是 /doubao-paint 技能手势（v1.3.0 起唯一人类入口）
   assert.equal(
     moduleApi.formatAgentCommandPrompt('  一只  猫  ', { aspectRatio: '4:3', style: 'cinematic-cg' }),
-    '请调用 `doubao_generate_image` 工具操控豆包网页版生图：一只 猫（比例：4:3，风格：电影级 CG）',
+    '/doubao-paint 一只 猫（比例：4:3，风格：电影级 CG）',
   );
   assert.equal(moduleApi.formatAgentCommandPrompt(''), '');
+  const gesture = moduleApi.formatAgentCommandPrompt('月球上的橘猫', { aspectRatio: '16:9', style: 'auto' });
+  assert.match(gesture, /^\/doubao-paint 月球上的橘猫（比例：16:9）$/);
+  assert.equal(gesture.includes('请调用'), false, '不再让 Agent 自己拼工具调用指令');
+  assert.equal(gesture.includes('\n'), false, '手势必须单行，附带参数不能另起一行');
+
+  // 工作区分组：服务端 groups 优先，老服务端裸 history 回落为单组
+  const wsA = 'D:\\Projects\\active\\a';
+  const wsB = 'D:\\Projects\\active\\b';
+  const grouped = moduleApi.normalizeHistoryGroups(
+    {
+      groups: [
+        { key: wsB, label: 'b', count: 12, current: false, images: [{ id: 'b1' }] },
+        { key: wsA, label: 'a', count: 3, current: true, images: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }] },
+      ],
+    },
+    wsA,
+  );
+  assert.equal(grouped[0].key, wsA, '当前工作区必须置顶');
+  assert.equal(grouped[0].count, 3);
+  assert.equal(grouped[0].images.length, 3, '当前组必须吐出全部 3 张，不能再截断');
+  assert.equal(grouped[1].count, 12, '其它组的 count 用服务端真实总数');
+  assert.equal(moduleApi.workspaceOfSession({ cwd: wsA }), wsA);
+  assert.equal(moduleApi.workspaceOfSession({ header: { cwd: wsB } }), wsB);
+  assert.equal(moduleApi.workspaceOfSession(undefined), '');
+  const legacy = moduleApi.normalizeHistoryGroups({ history: [{ id: 'x1' }, { id: 'x2' }] }, '');
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].count, 2);
+  assert.equal(legacy[0].current, true);
 
   // 插入走 slot 下发的 inputActions（宿主 uiSession.provide 的 props.inputActions）
   const insertCalls = [];
