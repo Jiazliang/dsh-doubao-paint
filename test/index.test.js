@@ -1420,6 +1420,11 @@ test('G23: runtime 技能注册（模型可调用 + 内容含工具与命令用�
   const skill = registered[0];
   assert.equal(skill.name, 'doubao-paint');
   assert.deepEqual(skill.invocation, { modelInvocable: true, userInvocable: true });
+  // 宿主 skills 加载器校验：source / provider 必须是字符串，否则整轮抛 `loaded skill "…" source must be a string`
+  assert.equal(typeof skill.source, 'string');
+  assert.equal(typeof skill.provider, 'string');
+  assert.equal(typeof skill.content, 'string');
+  assert.ok(skill.content.length > 100);
   assert.match(skill.description, /豆包/);
   assert.match(skill.content, /doubao_generate_image/);
   assert.match(skill.content, /\/doubao-paint/);

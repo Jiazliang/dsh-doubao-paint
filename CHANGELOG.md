@@ -2,6 +2,12 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.3.1] — 2026-11-07
+
+### 修复
+- 技能注册缺 `source` / `provider` 字段，宿主加载器报 `loaded skill "doubao-paint" source must be a string` 并让整轮失败；现在显式写 `source: 'runtime'`、`provider: 'doubao-paint'`，`metadata.version` 同步 1.3.1。
+- 回归里补断言：`skill.source` / `skill.provider` / `skill.content` 必为字符串且内容非空，防止再退化。
+
 ## [1.3.0] — 2026-11-07
 
 ### 移除
