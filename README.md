@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v1.2.0 — 离线验收 31/31 全绿、`npm run smoke`（15 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 31/31（G1–G26 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染、工具图卡与折叠详情）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10，v1.2 的图卡与转交模型见 §6.11。
+**状态：v1.2.1 — 离线验收 31/31 全绿、`npm run smoke`（15 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 31/31（G1–G26 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染、工具图卡与折叠详情）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10，v1.2 的图卡与转交模型见 §6.11。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -402,6 +402,16 @@ v1.2 解决三件事：工具结果不再挤缩略图、命令能让模型先细
 
 生图完成后图卡派发 `dsh-doubao-paint:generated`（`window.dispatchEvent`），面板收到后重新拉
 `/doubao-paint/status` 更新 history——事件驱动，不轮询、不空转。
+
+#### 6.11.4 转交失败的三重兜底（v1.2.1）
+
+真机复验发现：`conversation.chat.commandview` 的组件拿不到 `inputActions` prop（另两处 UI 槽能拿到），于是「替用户按下发送」静默失败。
+
+| 层 | 做法 |
+| --- | --- |
+| 缓存 | 触发条/面板拿到 `inputActions` 时按 `sessionId` 登记，命令卡片取回（`rememberInputActions` / `lookupInputActions`） |
+| 探测 | 写草稿、持久化、发送各按候选方法名逐个试，不假设 `setDraft` / `submit` 一定存在 |
+| 重试 + 可见 | 最多 5 次 × 400ms；仍失败则卡片显示具体原因（如 `missing-submitter`）并给出「重试」按钮 |
 
 ## 7. 目录（已落盘的实际结构）
 

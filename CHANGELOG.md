@@ -2,6 +2,14 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] — 2026-11-07
+
+### 修复
+- 命令 `/doubao-paint` 转交模型时真机报「输入框未就绪」：命令卡片（`conversation.chat.commandview`）拿不到 `inputActions` prop。
+  - 会话级旁路缓存：触发条与面板拿到 `inputActions` 时登记（`rememberInputActions` / `lookupInputActions`），命令卡片按 `sessionId` 取回。
+  - `submitRelayInstructionDetailed` 按候选名探测写草稿/持久化/发送方法（`setDraft|setText|replaceDraft|updateDraft`、`persistDraft|commitDraft`、`submit|send|submitDraft`），失败返回可显示原因（`no-input-actions` / `missing-setter` / `missing-submitter` / `*-threw: …`）。
+  - 命令卡片改为最多 5 次、间隔 400ms 的重试，失败时把原因写进卡片并提供「重试」按钮。
+
 ## [1.2.0] — 2026-11-07
 
 ### 新增

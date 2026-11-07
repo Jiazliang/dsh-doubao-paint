@@ -1628,7 +1628,15 @@ test('G24: client 注册 conversation.chat.commandview 并把命令尾行渲染�
   });
   const relayLine = relayView.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-relay');
   assert.ok(relayLine, 'relay 命令必须渲染转交提示');
-  assert.match(relayLine.props.children, /转交/);
+  const relayText = (Array.isArray(relayLine.props.children) ? relayLine.props.children : [relayLine.props.children])
+    .filter((child) => child && typeof child === 'object' && child.props && typeof child.props.children === 'string')
+    .map((child) => child.props.children)
+    .join('');
+  assert.match(relayText, /转交/);
+  // 转交结果如何呈现：ok 时统一文案；失败时带 reason 与「重试」按钮
+  const failedView = CommandView({ node: { name: 'doubao-paint', outcome: { kind: 'success', text: relayed.text } }, inputActions: null, sessionId: 'no-such-session' });
+  const failedLine = failedView.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-relay');
+  assert.equal(failedLine.props['data-dsh-doubao-relay'], 'ok', '首次渲染（尚未派发）按乐观显示');
 
   // 纯函数部分直接验：写草稿 → 持久化 → 提交（effect 在测试桩里不执行）
   const instruction = '请先细化再调用 doubao_generate_image 生成图片：一只猫';
