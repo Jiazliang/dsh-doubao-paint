@@ -99,6 +99,49 @@ await check('command surface stays removed', () => {
   return 'no commandview / toolview present';
 });
 
+await check('status message lifecycle', () => {
+  const client = read('lib/client.js');
+  const ttl = client.match(/const STATUS_TTL_MS = (\d+);/);
+  if (!ttl) throw new Error('STATUS_TTL_MS 缺失');
+  if (ttl[1] !== '15000') throw new Error(`STATUS_TTL_MS 应为 15000，实际 ${ttl[1]}`);
+  // v1.4.3 的教训：注入 timers 只当覆盖，缺 setTimeout 时必须回落 globalThis，
+  // 否则默认参数 `{}` 会挡掉真宿主计时器，提示永不收回。
+  if (!/timers && typeof timers\.setTimeout === "function"/.test(client)) {
+    throw new Error('定时器回落逻辑缺失（注入对象缺 setTimeout 时必须回落 globalThis）');
+  }
+  if (!/typeof globalThis !== "undefined"/.test(client)) throw new Error('globalThis 回落缺失');
+  const scheduled = (client.match(/scheduleStatusClear\(\)/g) || []).length;
+  if (scheduled < 2) throw new Error(`scheduleStatusClear 调用点过少（${scheduled}），状态下沉路径可能绕过自动收回`);
+  return `${ttl[1]}ms / ${scheduled} call sites`;
+});
+
+await check('locale parity', () => {
+  const zh = JSON.parse(read('locale/zh.json'));
+  const en = JSON.parse(read('locale/en.json'));
+  const pick = (obj) => {
+    const keys = new Set();
+    const walk = (node, prefix) => {
+      for (const [k, v] of Object.entries(node || {})) {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === 'object') walk(v, key);
+        else keys.add(key);
+      }
+    };
+    walk(obj, '');
+    return keys;
+  };
+  const zhKeys = pick(zh);
+  const enKeys = pick(en);
+  const missingInEn = [...zhKeys].filter((k) => !enKeys.has(k));
+  const missingInZh = [...enKeys].filter((k) => !zhKeys.has(k));
+  if (missingInEn.length > 0 || missingInZh.length > 0) {
+    throw new Error(
+      `zh/en 键不对称 — 仅 zh: ${JSON.stringify(missingInEn)}；仅 en: ${JSON.stringify(missingInZh)}`,
+    );
+  }
+  return `${zhKeys.size} keys, symmetric`;
+});
+
 const failed = checks.filter((c) => !c.ok);
 console.log(JSON.stringify({ ok: failed.length === 0, checks }, null, 2));
 if (failed.length > 0) process.exitCode = 1;
