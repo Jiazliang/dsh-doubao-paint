@@ -1918,4 +1918,20 @@ test('G27: 状态条 15 秒后自动收回，loading 期间不排定', async () 
   assert.equal(scheduled, null, 'loading 进行中的提示不排定收回');
   store.setLoading(false, '✅ 成功', 'info');
   assert.equal(scheduled.ms, 15000, 'loading 结束后的提示同样排定收回');
+
+  // 不注入 timers 时必须回落 globalThis（真宿主走这条路径）：
+  // 默认参数 `{}` 曾把真计时器挡掉，表现为提示永不消失。
+  let hostScheduled = null;
+  sandbox.setTimeout = (fn, ms) => {
+    hostScheduled = { fn, ms };
+    return 11;
+  };
+  sandbox.clearTimeout = () => {
+    hostScheduled = null;
+  };
+  const hostStore = moduleApi.createDoubaoStudioStore();
+  hostStore.setLoading(false, '请先输入生图画面描述词（Prompt）', 'warn');
+  assert.equal(hostScheduled?.ms, 15000, '未注入 timers 时也必须用宿主的 setTimeout 排定收回');
+  hostScheduled.fn();
+  assert.equal(hostStore.getSnapshot().statusMessage, '', '未注入 timers 时提示同样会被清空');
 });
