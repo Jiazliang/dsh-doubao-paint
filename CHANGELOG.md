@@ -2,6 +2,20 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.1.1] — 2026-11-07
+
+### 修复
+
+- **契约检测不再把正常页面判成改版**：探针只校验页面骨架（`workspaceChip` + `newConversation`），
+  输入区在「开新对话之后」单独探测，且只要求 `inputEditor`（`sendButton` 只在有草稿时渲染）。
+  首页引导态、已登录态都不再触发 `contract_changed`。
+- **输入框写入失败自动重试**：豆包路由切换会重建 ProseMirror 节点，若写入落进已丢弃的执行上下文，
+  `execCommand('insertText')` 返回成功但读回为空。现在最多重试 3 次（每次新上下文），并复查文本是否一致。
+
+### 不变
+
+- 三个入口、同一条通道、同一份 `PaintOutcome` 保持不变；命令图卡渲染逻辑未改。
+
 ## [Unreleased]
 
 - 后续方向：豆包页面契约的自动巡检（定时探活 + 变更告警）、多账号/多标签并发配额、生成历史的面板筛选与检索。

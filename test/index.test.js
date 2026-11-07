@@ -1140,7 +1140,7 @@ test('G15: 单飞锁 — 并发调用立即返回 busy', async () => {
 });
 
 test('G16: 选择器契约快照与漂移检测', async () => {
-  const { DOUBAO_SELECTORS, DOUBAO_MARKERS, REQUIRED_SELECTORS, missingSelectors, describeContract } =
+  const { COMPOSER_SELECTORS, DOUBAO_SELECTORS, DOUBAO_MARKERS, REQUIRED_SELECTORS, missingSelectors, describeContract } =
     await import('../lib/contract.js');
 
   // 契约表是脚本的唯一真源：每个选择器都必须真的出现在某个脚本里
@@ -1168,10 +1168,15 @@ test('G16: 选择器契约快照与漂移检测', async () => {
   // 漂移判定
   const healthy = Object.fromEntries(REQUIRED_SELECTORS.map((id) => [id, 1]));
   assert.deepEqual(missingSelectors(healthy), { ok: true, missing: [], total: REQUIRED_SELECTORS.length });
-  const broken = { ...healthy, loginButton: 0, inputEditor: 0 };
+  // 骨架缺失（探针阶段）
+  const broken = { ...healthy, workspaceChip: 0 };
   const verdict = missingSelectors(broken);
   assert.equal(verdict.ok, false);
-  assert.deepEqual(verdict.missing, ['loginButton', 'inputEditor']);
+  assert.deepEqual(verdict.missing, ['workspaceChip']);
+  // 输入区缺失（对话打开后单独判定，不算骨架失败）
+  const composerBroken = { workspaceChip: 1, newConversation: 1, inputEditor: 0, sendButton: 0 };
+  assert.equal(missingSelectors(composerBroken).ok, true);
+  assert.deepEqual(missingSelectors(composerBroken, COMPOSER_SELECTORS).missing, ['inputEditor']);
   assert.equal(missingSelectors({}).ok, false);
   assert.equal(describeContract().length, Object.keys(DOUBAO_SELECTORS).length);
 });
@@ -1187,7 +1192,7 @@ test('G17: 页面结构漂移时返回 contract_changed 而不是超时', async 
           isLoggedIn: true,
           pageUrl: 'https://www.doubao.com/chat/abc',
           pageTitle: '豆包',
-          // 已登录但四个必需选择器全为 0 —— 典型改版
+          // 已登录但页面骨架（workspaceChip / newConversation）全为 0 —— 典型改版
           contract: { loginButton: 0, loginModal: 0, inputEditor: 0, sendButton: 0, skillButton: 0 },
           images: [],
         };
@@ -1203,7 +1208,38 @@ test('G17: 页面结构漂移时返回 contract_changed 而不是超时', async 
   );
   assert.equal(result.status, 'failed');
   assert.equal(result.code, 'contract_changed');
-  assert.deepEqual(result.details.missingSelectors, ['loginButton', 'loginModal', 'inputEditor', 'sendButton']);
+  assert.deepEqual(result.details.missingSelectors, ['workspaceChip', 'newConversation']);
+});
+
+test('G17b: 对话打开后输入区漂移也返回 contract_changed', async () => {
+  const composerDrift = {
+    async ensureDaemon() {},
+    async ensurePage() { return { pageId: 4, url: 'https://www.doubao.com/chat/' }; },
+    async evaluate(name) {
+      if (name === '01-probe') {
+        return {
+          isLoggedIn: true,
+          pageUrl: 'https://www.doubao.com/chat/abc',
+          pageTitle: '豆包',
+          contract: { workspaceChip: 1, newConversation: 1, inputEditor: 0, sendButton: 0 },
+          images: [],
+        };
+      }
+      if (name === '05b-composer') {
+        return { ok: false, contract: { inputEditor: 0, sendButton: 0 } };
+      }
+      return { ok: true };
+    },
+    async screenshot() {},
+    async stop() {},
+  };
+  const result = await executeDoubaoAction(
+    { mode: 'generate', prompt: '一只猫', config: normalizeConfig({}) },
+    { chrome: composerDrift, history: [] },
+  );
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'contract_changed');
+  assert.deepEqual(result.details.missingSelectors, ['inputEditor']);
 });
 
 test('G18：history 持久化（落盘 / 读回 / 坏 JSON / 合并去重 / 上限）', async () => {
@@ -1295,7 +1331,8 @@ test('G20：环境体检（cli 缺失 / 输出目录不可写 / 全绿三态）'
     assert.equal(healthy.outputDir.exists, true);
     assert.equal(healthy.outputDir.writable, true);
     assert.equal(healthy.contract.selectors, 8);
-    assert.equal(healthy.contract.required, 4);
+    assert.equal(healthy.contract.required, 2);
+    assert.equal(healthy.contract.composer, 1);
     assert.equal(healthy.versions.plugin, '0.4.0');
     assert.deepEqual(healthy.problems, []);
 

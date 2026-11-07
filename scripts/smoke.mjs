@@ -100,7 +100,8 @@ await check('health report', () => {
     chrome: { path: '/fake/chrome-devtools.js', exists: true },
   });
   if (report.ok !== true) throw new Error(`healthy fixture flagged: ${JSON.stringify(report.problems)}`);
-  if (report.contract.required !== 4) throw new Error('contract required count broken');
+  if (report.contract.required !== 2) throw new Error('contract required count broken');
+  if (report.contract.composer !== 1) throw new Error('contract composer count broken');
   const missing = mod.buildHealthReport({
     config: { outputDir: 'doubao_images' },
     backend: 'ego',

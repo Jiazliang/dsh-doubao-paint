@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v1.1.0 — 离线验收 29/29 全绿、`npm run smoke`（13 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 29/29（G1–G25 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10。
+**状态：v1.1.1 — 离线验收 30/30 全绿、`npm run smoke`（13 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 30/30（G1–G25 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -291,7 +291,7 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 | `cancelled` | 调用被取消 | `AbortError` / `signal.aborted` |
 | `cli_missing` | 后端 CLI 不存在 | ego / chrome 探测失败、`ENOENT` |
 | `backend_unavailable` | 无可用后端 | `/doubao-paint/status` 返回 503 |
-| `contract_changed` | 豆包改版 | 必需选择器缺失、输入/发送未生效 |
+| `contract_changed` | 豆包改版 | 骨架或输入区必需选择器缺失、输入未生效 |
 | `rate_limited` | 被限流 | 429 / rate limit / 验证码关键词 |
 | `unknown` | 其他 | 兜底 |
 
@@ -299,7 +299,11 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 **③ 落盘原子性 + 重名保护**：`lib/download.js` 的 `writeFileAtomic`（同目录 `.tmp-<8hex>` + `rename`）与 `uniqueFilePath`（`_1.png` 已存在则 `_1-2.png`…），避免半截文件与同秒重名覆盖。
 
-**④ 选择器契约漂移检测**：`lib/contract.js` 把 8 个 `data-testid` 与 2 个图片特征收敛成单一真源；`buildProbeScript` 会回报每个选择器的命中数，`missingSelectors()` 判定 `loginButton` / `loginModal` / `inputEditor` / `sendButton` 是否缺失 → 缺失即 `contract_changed`（错误文案直接提示升级插件或反馈 issue）。G16 还会校验「契约表里的每个选择器都真的出现在页面脚本源码里」，防止改了表忘了改脚本。
+**④ 选择器契约漂移检测（v1.1.1 分两段）**：`lib/contract.js` 把 8 个 `data-testid` 与 2 个图片特征收敛成单一真源。判定分两段，因为豆包首页是渐进渲染的：
+   - **骨架段**（`05-probe`）：只要求 `workspaceChip` + `newConversation`。**不含登录按钮与输入框**——已登录时 `to_login_button` 本来就不存在，首页引导态也没有 `.ProseMirror`（2026-11-07 真机踩到，旧四项必需会把正常页面判成改版）。
+   - **输入区段**（`05b-composer`，开完新对话之后）：最多 6 次、每次间隔 400ms 重新快照，只要求 `inputEditor`；`sendButton` 只在有草稿时渲染，不算必需。
+   - 任一段缺失 → `contract_changed`，错误文案提示升级插件或反馈 issue，`details.missingSelectors` 列出具体缺项。G16 / G17b 校验两段判定，并确保契约表里的每个选择器都真的出现在页面脚本源码里。
+   - **写入重试**：豆包路由切换会重建 ProseMirror 节点，若写入落进已丢弃的执行上下文，`execCommand` 返回成功但读回为空；`05-input` 因此最多重试 3 次（每次新上下文），并复查文本是否逐字一致。
 
 **⑤ 超时预算统一**：`resolveToolTimeoutMs(config.timeoutMs)` 把工具超时按 `配置 + 30s` 夹到 `60s…300s`（120s 配置 → 150s 工具超时）；轮询内部只用 `timeoutMs × 0.85` 的预算，给截图、下载、附件注入留出余量；单图下载另有 `DOWNLOAD_TIMEOUT_MS = 45s` 并和外部 `AbortSignal` 合并。
 
