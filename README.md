@@ -138,7 +138,7 @@ npm pack --dry-run                 # 发布包不含内部文档
 
 - 豆包改版会命中 `contract_changed`：契约集中在 `lib/contract.js`（骨架段 `workspaceChip`/`newConversation`，输入区段 `inputEditor`），改这里即可。
 - ego 后端在后台空间截图不稳定：截图失败会被跳过（`screenshots` 为空或仅路径），不影响图片下载。
-- 插件代码改动后需两步才生效：先 `node scripts/sync-profile.mjs` 把工作区源码同步进宿主实际加载的 profile 副本（默认 `~/.dsh/profiles/desktop/node_modules/dsh-doubao-paint`，脚本按 SHA256 逐文件核对），再重启宿主——ESM 模块在进程内只求值一次，不重启仍是旧代码。
+- 插件代码改动后需两步才生效——**取决于安装方式**：①GitHub / Release 装（上文 A、B），先把改动 push 并打新 tag，再用同一 `install_bundle` 指向新 tag 或新 `.tgz`，然后重启宿主；②本地源码装（`target=file:<绝对路径>`，开发者用），先 `node scripts/sync-profile.mjs` 把工作区源码同步进 profile 副本（默认 `~/.dsh/profiles/desktop/node_modules/dsh-doubao-paint`，脚本按 SHA256 逐文件核对），再重启宿主。ESM 模块在进程内只求值一次，不重启仍是旧代码。
 - 单机单任务：并发第二次调用会立刻拿到 `busy`。
 - 图片与 `.history.json` 统一落在 `<宿主进程 cwd>/doubao_images`（默认即 profile 目录），不按会话工作区分散存放；工作区只作为记录上的标签用于面板分组，切换工作区不会改变落盘位置。
 
