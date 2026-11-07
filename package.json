@@ -1,6 +1,6 @@
 {
   "name": "dsh-doubao-paint",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Doubao Web AI Image Generation Agent Tool plugin for DeepSeek Harness (豆包网页版 AI 生图 Agent 工具插件：向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生工具，优先用本机 ego lite、回落 Chrome + chrome-devtools-mcp，操控 doubao.com 文生图、自动优选 wm0 无水印 2.7K 超清原图落盘并作为多模态图像附件返回)",
   "type": "module",
   "main": "lib/index.js",

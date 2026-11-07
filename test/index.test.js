@@ -896,6 +896,11 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
     (node) => node.type === 'button' && node.props['data-dsh-doubao-group'] !== undefined,
   );
   assert.equal(groupHeads.length, 2);
+  assert.doesNotMatch(
+    textOf(groupedDock),
+    /group-\d+\.png/,
+    '卡片条只放「引用路径」，不再显示文件名（文件名太长会挤坏排版）',
+  );
   assert.equal(groupHeads[0].props['data-dsh-doubao-group'], 'D:\\work\\proj-a');
   assert.equal(groupHeads[0].props['aria-expanded'], 'true', '当前工作区默认展开');
   assert.equal(groupHeads[1].props['aria-expanded'], 'false', '其它工作区默认折叠');
