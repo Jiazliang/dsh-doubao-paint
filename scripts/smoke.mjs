@@ -119,6 +119,44 @@ await check('history persistence', async () => {
   return `keep ${history.DEFAULT_KEEP_RUNS} runs / merge ${merged.length}`;
 });
 
+await check('unified entry', () => {
+  const request = mod.normalizePaintRequest({ mode: 'generate', prompt: '猫' });
+  if (request.maxImages !== 4) throw new Error('maxImages default broken');
+  if (request.newConversation !== true) throw new Error('newConversation default broken');
+  if (typeof mod.submitPaintRequest !== 'function') throw new Error('submitPaintRequest missing');
+  return `${request.mode} / max ${request.maxImages}`;
+});
+
+await check('command + skill', () => {
+  const parsed = mod.parseCommandArgs('一只猫 --ratio 16:9 --count 2 --reuse');
+  if (parsed.prompt !== '一只猫') throw new Error('command prompt parse broken');
+  if (parsed.aspectRatio !== '16:9') throw new Error('command --ratio broken');
+  if (parsed.maxImages !== 2) throw new Error('command --count broken');
+  if (parsed.newConversation !== false) throw new Error('command --reuse broken');
+  if (mod.PAINT_COMMAND_NAME !== 'doubao-paint') throw new Error('command name broken');
+  if (mod.PAINT_SKILL?.invocation?.modelInvocable !== true) throw new Error('skill invocation broken');
+  if (!mod.PAINT_SKILL.content.includes('doubao_generate_image')) throw new Error('skill content broken');
+  return `${mod.PAINT_COMMAND_NAME} / skill ${mod.PAINT_SKILL.name}`;
+});
+
+await check('adapter parity', () => {
+  const outcome = {
+    status: 'succeeded',
+    code: 'ok',
+    message: 'ok',
+    prompt: '猫',
+    outputDir: 'out',
+    imageCount: 1,
+    images: [{ filename: 'a.png', previewUrl: '/doubao-paint/file?id=a.png', width: 8, height: 8, sizeBytes: 1024 }],
+  };
+  const tool = JSON.parse(mod.renderToolResult(outcome)[0].text);
+  const command = mod.decodeCommandPayload(mod.renderCommandResult(outcome).text);
+  if (tool.status !== command.status) throw new Error('status mismatch between adapters');
+  if (tool.images.length !== command.images.length) throw new Error('image count mismatch');
+  if (tool.outputDir !== command.outputDir) throw new Error('outputDir mismatch');
+  return `status ${tool.status} / ${tool.images.length} image`;
+});
+
 const failed = checks.filter((item) => !item.ok);
 const report = {
   ok: failed.length === 0,

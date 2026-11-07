@@ -6,6 +6,28 @@
 
 - 后续方向：豆包页面契约的自动巡检（定时探活 + 变更告警）、多账号/多标签并发配额、生成历史的面板筛选与检索。
 
+## [1.1.0] — 2026-11-07
+
+### 新增
+
+- `lib/entry.js`：`submitPaintRequest(request, deps)` 成为**唯一入口**（工具 / 命令 / HTTP 路由共用），`normalizePaintRequest` 统一缺省（`maxImages=4`、`newConversation=true`），history 落盘只在 `succeeded` 时发生。
+- `lib/render.js`：三个哑适配器——`renderToolResult` / `renderCommandResult` / 路由 `sendJson`；`encodeCommandPayload` 与 `decodeCommandPayload`（前缀 `doubao-paint:v1 `）承载机器可读尾行。
+- `lib/commands.js`：人类命令 `/doubao-paint <画面描述> [--ratio] [--style] [--count] [--neg] [--dir] [--prefix] [--reuse]`，零模型回合；支持 `--flag value` 与 `--flag=value`、引号剥离、未知 flag 留在提示词、缺值报错。
+- `lib/skill.js`：runtime 技能 `doubao-paint`（`modelInvocable` + `userInvocable`），教模型何时调工具、参数怎么写、结果怎么读。
+- `lib/client.js`：注册 keyed slot `conversation.chat.commandview`（key = `doubao-paint`），把命令结果渲染成**图卡**（网格 + `figure/img` + `figcaption`），图源走 `/doubao-paint/file?id=`。
+- `scripts/smoke.mjs`：新增 `unified entry`、`command + skill`、`adapter parity` 三项（共 13 项）。
+
+### 变更
+
+- `inject` 从 `['tools','attachments']` 扩为 `['tools','attachments','commands','skills']`。
+- 工具与三条路由全部改调 `submitPaintRequest`；`apply` 内的 `syncHistory` 移除（收敛进入口）。
+- 命令在 CLI / 远程终端只呈现文本（`GenericCommandCard`），在 Web UI 呈现图卡——同一份 outcome、不同渲染器。
+- `PLUGIN_VERSION` 与 `package.json` 版本升至 `1.1.0`。
+
+### 测试
+
+- 新增 G21（三适配器同契约）、G22（命令解析与 handler）、G23（技能注册）、G24（命令图卡渲染，含失败态与 running 态）、G25（统一入口与 history 落盘条件）；`node --test test/index.test.js` **29/29**。
+
 ## [1.0.0] — 2026-11-07
 
 ### 新增

@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v1.0.0 — 离线验收 24/24 全绿、`npm run smoke`（10 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 24/24（G1–G20 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9。
+**状态：v1.1.0 — 离线验收 29/29 全绿、`npm run smoke`（13 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 29/29（G1–G25 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -338,6 +338,38 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 **④ 触发条无障碍**：`conversation.input.left` 的胶囊按钮补 `role="button"`、`tabIndex=0`、`aria-label`（随展开态切换「展开/收起」）、`title`、`onKeyDown`（Enter / Space 触发并 `preventDefault`），图标 `aria-hidden`，标签走 i18n。
 
 冒烟脚本同步加了 `error messages i18n` 一项（校验 12 个 code 都有英文条目、en/zh 不塌陷、未知语言回落中文、未知 code 回落 `unknown`），现共 **10 项**。
+
+## 6.10 三个入口同一条通道（v1.1，2026-11-07）
+
+v1.1 的主题是**入口多样、通道唯一**：工具调用、人类命令 `/doubao-paint`、前端面板按钮三条路都收敛到同一个函数、同一份结果契约、同一套渲染器。
+
+**① 唯一入口**（`lib/entry.js`）
+
+```
+submitPaintRequest(request, deps)          // 工具 execute / 命令 handler / HTTP 路由三处共用
+  → normalizePaintRequest(request)         // mode 缺省 generate；maxImages 缺省 4；newConversation 缺省 true
+  → executeDoubaoAction(...)               // 单飞锁、契约检测、轮询、下载都在这一层
+  → saveHistory(...)                       // 只有 succeeded 才落盘 .history.json
+  → PaintOutcome                           // 唯一结果契约
+```
+
+工具（`doubao_generate_image` / `doubao_image_status`）、`/doubao-paint/{status,open,generate}` 路由、命令 handler 全部只调这一个函数，谁都不再自己拼状态码或自己写 history。
+
+**② 三个哑适配器**（`lib/render.js`）：`renderToolResult` / `renderCommandResult` / 路由的 `sendJson`。适配器只翻译格式，**不判断状态、不拼文案**。`PaintOutcome` 字段沿用 v1.0 的 `{status, code, message, requestId, mode, images[], imageCount, outputDir, screenshots[], health?}`。
+
+**③ 人类命令**（`lib/commands.js`）
+
+```
+/doubao-paint <画面描述> [--ratio 16:9] [--style cyberpunk] [--count 2] [--neg 避免内容] [--dir 目录] [--reuse]
+```
+
+支持 `--flag value` 与 `--flag=value`、引号成对剥离；未知 flag 原样留在提示词里；`--reuse` 复用当前会话（否则每次新对话）。命令走宿主 `commands` 服务，**零模型回合**（`execute` 不经模型），日志里记 `command/run` / `command/done`。
+
+**④ 命令也能显示图卡**（`lib/client.js`）：命令 `text` = 人读摘要 + 一行机器可读 JSON（前缀 `doubao-paint:v1 `，含 `images[{filename,previewUrl,width,height,sizeBytes}]`）。客户端注册 keyed slot `conversation.chat.commandview`（key = `doubao-paint`）解析尾行渲染图卡，图源走 `/doubao-paint/file?id=`（v1.0 已收口）。CLI / 远程终端里同一命令只有文本（`GenericCommandCard` 路径）——**同一份 outcome、不同渲染器**，不是分叉逻辑。
+
+**⑤ runtime 技能**（`lib/skill.js`）：注册名为 `doubao-paint` 的技能（`modelInvocable` + `userInvocable` 双真），内容说明「何时该调工具、参数怎么写、比例风格放参数而不是提示词、结果状态怎么读」。技能不是执行体，只是教模型在正确的时机调用同一个工具。
+
+**⑥ 一致性可回归**：G21 把同一份 outcome 喂给两个适配器，断言 `status` / `outputDir` / 图片数完全相同；G24 在假 DOM 里渲染命令视图，断言图卡 `src` 与摘要不含载荷行。
 
 ## 7. 目录（已落盘的实际结构）
 

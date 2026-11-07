@@ -8,6 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -36,6 +37,18 @@ import {
   PaintError,
   classifyError,
   errorMessage,
+  // v1.1.0：统一入口 / 适配器 / 命令 / 技能
+  normalizePaintRequest,
+  submitPaintRequest,
+  renderToolResult,
+  renderCommandResult,
+  encodeCommandPayload,
+  decodeCommandPayload,
+  PAINT_COMMAND_NAME,
+  parseCommandArgs,
+  registerPaintCommand,
+  PAINT_SKILL,
+  registerPaintSkill,
 } from '../lib/index.js';
 import { sanitizeFilenamePrefix } from '../lib/prompt.js';
 import {
@@ -1302,6 +1315,281 @@ test('G20：环境体检（cli 缺失 / 输出目录不可写 / 全绿三态）'
     assert.equal(nested.exists, false);
     assert.equal(nested.writable, true);
     assert.ok(nested.path.endsWith(path.join('a', 'b')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── G21 三个入口共用同一份结果契约 ───────────────────────────────────────────
+function makePaintOutcome(overrides = {}) {
+  return {
+    status: 'succeeded',
+    code: 'ok',
+    message: '已生成并保存 1 张图片',
+    mode: 'generate',
+    prompt: '一只猫',
+    formattedPrompt: '请生成图片：一只猫（画面比例：16:9）',
+    aspectRatio: '16:9',
+    style: 'auto',
+    outputDir: 'C:/tmp/out',
+    requestId: 'doubao-generate-test',
+    imageCount: 1,
+    images: [
+      {
+        filename: 'a.png',
+        filePath: 'C:/tmp/out/a.png',
+        previewUrl: '/doubao-paint/file?id=a.png',
+        width: 2848,
+        height: 1600,
+        sizeBytes: 4155616,
+      },
+    ],
+    screenshots: [],
+    ...overrides,
+  };
+}
+
+test('G21: 工具 / 命令 / 路由三个适配器输出同一份结果契约', () => {
+  const outcome = makePaintOutcome();
+
+  const toolBlocks = renderToolResult(outcome);
+  assert.equal(toolBlocks[0].type, 'text');
+  const toolJson = JSON.parse(toolBlocks[0].text);
+
+  const commandResult = renderCommandResult(outcome);
+  const commandPayload = decodeCommandPayload(commandResult.text);
+
+  // 路由侧直接返回 outcome（sendJson 的结果），这里等价于 identity
+  const routeJson = JSON.parse(JSON.stringify(outcome));
+
+  for (const view of [toolJson, commandPayload, routeJson]) {
+    assert.equal(view.status, 'succeeded');
+    assert.equal(view.outputDir, 'C:/tmp/out');
+    assert.equal(view.images.length, 1);
+    assert.equal(view.images[0].filename, 'a.png');
+  }
+  assert.equal(toolJson.imageCount, 1);
+  assert.equal(commandPayload.images[0].previewUrl, '/doubao-paint/file?id=a.png');
+  assert.equal(commandPayload.images[0].width, 2848);
+
+  // 失败态：三个适配器都给出同一 code，命令侧不携带图片尾行
+  const failed = makePaintOutcome({ status: 'failed', code: 'contract_changed', message: '页面结构变了', imageCount: 0, images: [] });
+  assert.equal(JSON.parse(renderToolResult(failed)[0].text).code, 'contract_changed');
+  const failedCommand = renderCommandResult(failed);
+  assert.equal(failedCommand.kind, 'error');
+  assert.match(failedCommand.text, /contract_changed/);
+  assert.equal(decodeCommandPayload(failedCommand.text), null);
+});
+
+// ── G22 命令注册与参数解析 ───────────────────────────────────────────────────
+test('G22: /doubao-paint 命令注册、参数解析与执行', async () => {
+  const registered = [];
+  const commands = {
+    register(definition) {
+      registered.push(definition);
+      return () => {};
+    },
+  };
+  const calls = [];
+  const outcome = makePaintOutcome();
+  const run = async (request) => {
+    calls.push(request);
+    return outcome;
+  };
+
+  registerPaintCommand(commands, run);
+  assert.equal(registered.length, 1);
+  const definition = registered[0];
+  assert.equal(definition.name, PAINT_COMMAND_NAME);
+  assert.equal(definition.name, 'doubao-paint');
+  assert.match(definition.description, /豆包/);
+  assert.ok(definition.input.hint.includes('--ratio'));
+
+  const ok = await definition.handler({ rawInput: '  一只猫 --ratio 16:9 --style cyberpunk --count 2 --neg 文字 --reuse  ', attachments: [] });
+  assert.equal(ok.kind, 'success');
+  assert.match(ok.text, /豆包生图：succeeded/);
+  assert.notEqual(decodeCommandPayload(ok.text), null);
+  assert.deepEqual(calls[0], {
+    mode: 'generate',
+    prompt: '一只猫',
+    aspectRatio: '16:9',
+    style: 'cyberpunk',
+    negativePrompt: '文字',
+    outputDir: undefined,
+    filenamePrefix: undefined,
+    maxImages: 2,
+    newConversation: false,
+    keepTab: undefined,
+  });
+
+  const empty = await definition.handler({ rawInput: '   ', attachments: [] });
+  assert.equal(empty.kind, 'error');
+  assert.match(empty.text, /用法：\/doubao-paint/);
+
+  const eq = parseCommandArgs('"戴帽子的猫" --ratio=4:3 --dir out');
+  assert.equal(eq.prompt, '戴帽子的猫');
+  assert.equal(eq.aspectRatio, '4:3');
+  assert.equal(eq.outputDir, 'out');
+
+  assert.throws(() => parseCommandArgs('猫 --ratio'), /缺少取值/);
+  // 未知 flag 不报错，原样留在提示词里
+  assert.equal(parseCommandArgs('猫 --weird 1').prompt, '猫 --weird 1');
+});
+
+// ── G23 技能注册 ────────────────────────────────────────────────────────────
+test('G23: runtime 技能注册（模型可调用 + 内容含工具与命令用法）', () => {
+  const registered = [];
+  const skills = {
+    register(skill) {
+      registered.push(skill);
+      return () => {};
+    },
+  };
+  const disposer = registerPaintSkill(skills);
+  assert.equal(typeof disposer, 'function');
+  assert.equal(registered.length, 1);
+
+  const skill = registered[0];
+  assert.equal(skill.name, 'doubao-paint');
+  assert.deepEqual(skill.invocation, { modelInvocable: true, userInvocable: true });
+  assert.match(skill.description, /豆包/);
+  assert.match(skill.content, /doubao_generate_image/);
+  assert.match(skill.content, /\/doubao-paint/);
+  assert.match(skill.content, /不要.*生成图片/);
+  assert.equal(PAINT_SKILL.name, skill.name);
+});
+
+// ── G24 命令行图卡（client commandview 注册 + 渲染） ─────────────────────────
+test('G24: client 注册 conversation.chat.commandview 并把命令尾行渲染成图卡', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'client.js' });
+
+  const buildModule = sandbox.__DSH_DOUBAO_PAINT_BUILD__;
+  const makeStub = () => new Proxy(function () {}, {
+    get: (target, key) => {
+      if (key === 'then' || key === Symbol.toPrimitive) return undefined;
+      return makeStub();
+    },
+    apply: () => makeStub(),
+  });
+  const React = {
+    createElement: () => null,
+    useState: (initial) => [typeof initial === 'function' ? initial() : initial, () => {}],
+    useEffect: () => {},
+    useLayoutEffect: () => {},
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useRef: (initial) => ({ current: initial }),
+    useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+    createContext: () => ({ Provider: () => null, Consumer: () => null }),
+    Fragment: 'Fragment',
+  };
+  const jsxRuntime = {
+    jsx: (type, props) => ({ type, props }),
+    jsxs: (type, props) => ({ type, props }),
+    Fragment: 'Fragment',
+  };
+  const moduleApi = buildModule((id) => {
+    if (id === 'react') return React;
+    if (id === 'react/jsx-runtime') return jsxRuntime;
+    if (id === '@deepseek-ai/dsh-client-store') {
+      return { useStore: (store, selector) => (selector ? selector(store.getSnapshot()) : store.getSnapshot()) };
+    }
+    return makeStub();
+  });
+
+  const registrations = [];
+  const components = [];
+  const slots = {
+    inject: (name, factory) => factory(),
+    register: (config, component) => {
+      registrations.push(config);
+      components.push(component);
+      return () => {};
+    },
+  };
+  const ctx = { locale: { register: () => {}, current: () => 'zh' }, slots };
+  moduleApi.apply(ctx);
+
+  const commandRegistration = registrations.find((entry) => entry.name === 'conversation.chat.commandview');
+  assert.ok(commandRegistration, '必须注册 conversation.chat.commandview');
+  assert.equal(commandRegistration.key, 'doubao-paint');
+  assert.equal(commandRegistration.locale, 'doubao-paint');
+
+  const index = registrations.indexOf(commandRegistration);
+  const CommandView = components[index];
+  assert.equal(typeof CommandView, 'function');
+
+  const payload = encodeCommandPayload(makePaintOutcome());
+  const success = CommandView({
+    node: { name: 'doubao-paint', outcome: { kind: 'success', text: `豆包生图：succeeded（ok）\n已保存 1 张：\n1. a.png\n${'doubao-paint:v1 '}${payload}` } },
+  });
+  assert.equal(success.props.className, 'dsh-dbimg-cmd');
+  assert.equal(success.props['data-dsh-doubao-command'], '1');
+  const grid = success.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-grid');
+  assert.ok(grid, '有图片时必须渲染图卡网格');
+  const figure = grid.props.children[0];
+  const image = figure.props.children[0];
+  assert.equal(image.type, 'img');
+  assert.equal(image.props.src, '/doubao-paint/file?id=a.png');
+  assert.match(figure.props.children[1].props.children, /2848×1600/);
+
+  // 文本里只保留人读部分，机器尾行不上屏
+  const textBlock = success.props.children.find((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-text');
+  assert.ok(textBlock);
+  assert.equal(textBlock.props.children.includes('doubao-paint:v1'), false);
+
+  const failed = CommandView({ node: { name: 'doubao-paint', outcome: { kind: 'error', text: '豆包生图：failed（cli_missing）' } } });
+  assert.match(failed.props.className, /failed/);
+  assert.equal(
+    failed.props.children.some((child) => child && child.props && child.props.className === 'dsh-dbimg-cmd-grid'),
+    false,
+  );
+
+  const running = CommandView({ node: { name: 'doubao-paint', outcome: null } });
+  assert.equal(running.props['aria-busy'], true);
+});
+
+
+// ── G25 统一入口：submitPaintRequest 归一化 + 未登录时不写 history ─────────────
+test('G25: submitPaintRequest 归一化缺省值，未登录时不落盘 history', async () => {
+  const normalized = normalizePaintRequest({ mode: 'generate', prompt: '猫' });
+  assert.equal(normalized.maxImages, 4);
+  assert.equal(normalized.newConversation, true);
+  assert.equal(normalized.mode, 'generate');
+  assert.equal(normalizePaintRequest({ mode: 'status' }).prompt, undefined);
+
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-entry-'));
+  try {
+    const history = [];
+    const fakeChrome = {
+      backend: 'fake',
+      async ensureDaemon() {
+        return { running: true };
+      },
+      async ensurePage() {
+        return { pageId: 1 };
+      },
+      async evaluate() {
+        // 未登录：探针返回 isLoggedIn=false
+        return { status: 'succeeded', isLoggedIn: false, pageUrl: 'https://www.doubao.com/chat/', pageTitle: '豆包' };
+      },
+      async screenshot() {
+        return { path: path.join(dir, 'login.png') };
+      },
+    };
+
+    const outcome = await submitPaintRequest(
+      { mode: 'generate', prompt: '猫', config: { outputDir: dir } },
+      { history, attachments: undefined, chrome: fakeChrome },
+    );
+
+    assert.equal(outcome.code, 'login_required');
+    assert.equal(outcome.status, 'login_required');
+    assert.equal(history.length, 0);
+    assert.equal(existsSync(path.join(dir, '.history.json')), false, '未成功的调用不得写 history 文件');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
