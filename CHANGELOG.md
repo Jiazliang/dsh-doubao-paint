@@ -4,14 +4,34 @@
 
 ## [Unreleased]
 
-### 计划（v0.2 发布阻断项，见 README §9 与 `memory_log` 2026-11-07 的 P0 清单）
+### 计划（v1.0 收尾项）
 
-- `browserBackend` 公共默认收敛为 `auto`，探测不到就返回 `backend_unavailable`；
-- 结构化错误码：`cli_missing` / `backend_unavailable` / `contract_changed` / `download_failed` / `busy` / `cancelled` / `rate_limited` / `no_image` / `partial`；
-- 选择器契约漂移检测 + 契约快照测试；
-- 落盘原子性（`tmp` + `rename`，同秒重名加 `requestId` 后缀）与 `.runs/` 保留策略；
-- 并发互斥单飞锁、超时预算统一、`AbortSignal` 贯通；
-- CI：`npm test` / `npm pack --dry-run` / 契约快照 / `node scripts/smoke.mjs --offline`。
+- P1：`history` 跨重启持久化、`.runs/` 保留策略、i18n 文案扩展、`partial` 结果在面板上的语义化展示；
+- P2：Linux/macOS 的 ego/chrome CLI 探测补齐、触发条无障碍（`aria-label` / 键盘激活）、`doubao_image_status` 结构化体检输出。
+
+## [0.3.0] — 2026-11-07
+
+### 新增
+
+- `lib/errors.js`：12 个结构化状态码（`ok` / `login_required` / `no_image` / `partial` / `download_failed` / `busy` / `cancelled` / `cli_missing` / `backend_unavailable` / `contract_changed` / `rate_limited` / `unknown`）+ `PaintError` + `classifyError` + `withCode` / `failureResult`；所有工具返回值都带 `status` / `code` / `message` 三件套。
+- `lib/contract.js`：豆包页面选择器契约（8 选择器 + 2 图片特征）成为单一真源，`buildProbeScript` 回报每个选择器命中数，缺失即 `contract_changed`。
+- `scripts/smoke.mjs`（`npm run smoke`）与 `npm run verify`；`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22，测试 + 冒烟 + 打包内容检查）。
+- 并发单飞锁（`activeRun` / `getActiveRun()`）：第二次并发调用立即返回 `busy`，附 `activeRequestId` / `activeMode` / `activeSince`。
+
+### 安全
+
+- `/doubao-paint/status` 在 ego 与 chrome 都探不到时返回 **503 `backend_unavailable`**，不再假装健康。
+
+### 变更
+
+- `browserBackend` 公共默认由 `ego` 收敛为 **`auto`**（探到 ego 用 ego，否则回落 Chrome）；想固定 ego 的机器显式配置 `ego'`。
+- 工具超时由硬编码 185000/65000 改为公式：`resolveToolTimeoutMs(config.timeoutMs)`（配置 + 30s，夹 60s…300s），状态工具取 `max(60s, 配置/2 + 20s)`；轮询预算改为 `timeoutMs × 0.85`。
+- `package.json`：`engines.node >=20`、`engines.dsh >=0.2.0-0`，peerDependencies 由 `"*"` 收紧为 `>=…`，`files` 增 `scripts/smoke.mjs`。
+
+### 修复
+
+- 同秒重名覆盖：下载落盘改为 `writeFileAtomic`（`.tmp` + `rename`）+ `uniqueFilePath`（`_1-2.png` 递增），不再产生半截文件或静默覆盖。
+- 单图下载无超时：新增 `DOWNLOAD_TIMEOUT_MS = 45s`，并与外部 `AbortSignal` 合并。
 
 ## [0.2.0] — 2026-11-07
 

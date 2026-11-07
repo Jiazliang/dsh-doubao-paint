@@ -26,6 +26,11 @@ import {
   pickImages,
   isInsideDirectory,
   resolveImageRequest,
+  resolveToolTimeoutMs,
+  DEFAULT_BROWSER_BACKEND,
+  PAINT_ERROR_CODES,
+  PaintError,
+  classifyError,
 } from '../lib/index.js';
 import { sanitizeFilenamePrefix } from '../lib/prompt.js';
 import {
@@ -35,6 +40,7 @@ import {
   buildSkillScript,
   buildNewConversationScript,
   buildCollectScript,
+  buildSwitchWorkModeScript,
   buildWaitReadyScript,
   shouldStopPolling,
 } from '../lib/doubao-page.js';
@@ -530,8 +536,8 @@ test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale',
   const status = registered.tools.find((tool) => tool.name === 'doubao_image_status');
   assert.ok(generate && status);
   assert.deepEqual(generate.parameters.required, ['prompt']);
-  assert.equal(generate.timeoutMs, 185000);
-  assert.equal(status.timeoutMs, 65000);
+  assert.equal(generate.timeoutMs, resolveToolTimeoutMs(normalizeConfig({}).timeoutMs));
+  assert.equal(status.timeoutMs, Math.max(60000, Math.round(normalizeConfig({}).timeoutMs / 2) + 20000));
   assert.deepEqual(
     registered.routes.map((route) => route.path).sort(),
     ['/doubao-paint/file', '/doubao-paint/generate', '/doubao-paint/open', '/doubao-paint/status'],
@@ -861,16 +867,20 @@ test('G10: ego 后端适配器（解析 / 路径探测 / 调用形态 / 无页�
   assert.deepEqual(await session.stop(), { stopped: false, reason: 'ego-space-persists' });
 });
 
-test('G11: 后端选择 — ego 优先、chrome 可强制、探测不到回落', async () => {
+test('G11: 后端选择 — 公共默认 auto、ego 显式优先、chrome 可强制、探测不到回落', async () => {
   const { createBrowserSession, resolveBrowserBackend } = await import('../lib/orchestrator.js');
 
-  // 默认就是 ego（用户 2026-11-07 决策：优先接入 ego）
-  assert.equal(normalizeConfig({}).browserBackend, 'ego');
+  // 面向他人的公共默认是 auto（探测到 ego 就用 ego，否则回落 chrome）
+  assert.equal(normalizeConfig({}).browserBackend, 'auto');
+  assert.equal(DEFAULT_BROWSER_BACKEND, 'auto');
+  // 本机装了 ego，所以 auto / 未指定 都会解析成 ego
   assert.equal(resolveBrowserBackend({}), 'ego');
   assert.equal(resolveBrowserBackend({ browserBackend: 'auto' }), 'ego');
   assert.equal(resolveBrowserBackend({ browserBackend: 'chrome' }), 'chrome');
-  // egoCliPath 传空且本机探测不到时回落 chrome（这里用假探测路径逼出空值）
-  assert.equal(resolveBrowserBackend({ browserBackend: 'ego', egoCliPath: '' }), 'ego');
+  // ego 显式要求但探测不到 → 回落 chrome，而不是抛出（第二参注入探测器桩）
+  assert.equal(resolveBrowserBackend({ browserBackend: 'ego' }, () => ''), 'chrome');
+  assert.equal(resolveBrowserBackend({ browserBackend: 'auto' }, () => ''), 'chrome');
+  assert.equal(resolveBrowserBackend({ browserBackend: 'ego', egoCliPath: 'C:\\ego\\ego-browser.exe' }), 'ego');
 
   const egoSession = createBrowserSession({ browserBackend: 'ego', doubaoUrl: 'https://www.doubao.com/chat/' });
   assert.equal(egoSession.backend, 'ego');
@@ -954,4 +964,191 @@ test('G12: /file 路由只服务 history 记录或 outputDir 内的图片', asyn
   } finally {
     await rm(outputDir, { recursive: true, force: true });
   }
+});
+
+test('G13: 结构化错误码 — 归类与结果三件套', async () => {
+  assert.ok(PAINT_ERROR_CODES.length >= 12);
+  for (const code of ['busy', 'cancelled', 'cli_missing', 'backend_unavailable', 'contract_changed', 'download_failed', 'partial', 'no_image', 'rate_limited']) {
+    assert.ok(PAINT_ERROR_CODES.includes(code), `missing code: ${code}`);
+  }
+
+  // 显式 code 原样保留
+  assert.equal(classifyError(new PaintError('cli_missing')), 'cli_missing');
+  // AbortError → cancelled
+  const abortErr = new Error('The operation was aborted');
+  abortErr.name = 'AbortError';
+  assert.equal(classifyError(abortErr), 'cancelled');
+  // 选择器失败文案 → contract_changed
+  assert.equal(classifyError(new Error('无法把提示词写入豆包输入框（{}）')), 'contract_changed');
+  // 限流文案 → rate_limited
+  assert.equal(classifyError(new Error('HTTP 429 Too Many Requests')), 'rate_limited');
+
+  // 编排器把异常收敛成 failed + code，而不是把异常抛给上层
+  const abortChrome = {
+    async ensureDaemon() {},
+    async ensurePage() { return { pageId: 1, url: 'https://www.doubao.com/chat/' }; },
+    async evaluate(name) {
+      if (name === '01-probe') {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        throw err;
+      }
+      return { ok: true };
+    },
+    async screenshot() {},
+    async stop() {},
+  };
+  const aborted = await executeDoubaoAction(
+    { mode: 'status', config: normalizeConfig({}) },
+    { chrome: abortChrome, history: [] },
+  );
+  assert.equal(aborted.status, 'failed');
+  assert.equal(aborted.code, 'cancelled');
+  assert.equal(typeof aborted.message, 'string');
+});
+
+test('G14: 落盘原子性与同秒重名', async () => {
+  const { downloadImages } = await import('../lib/download.js');
+  const dir = await mkdtemp(path.join(tmpdir(), 'dsh-doubao-atomic-'));
+  try {
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const fetchImage = async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => 'image/png' },
+      arrayBuffer: async () => pngBytes,
+    });
+    const baseOptions = {
+      outputDir: dir,
+      prefix: 'doubao',
+      timestamp: '2026-11-07T12-00-00',
+      history: [],
+      fetchImage,
+    };
+    const first = await downloadImages(
+      [{ src: 'https://p3.doubao.com/rc_gen_image/a.png~wm0.png', width: 2048, height: 2048 }],
+      baseOptions,
+    );
+    const second = await downloadImages(
+      [{ src: 'https://p3.doubao.com/rc_gen_image/b.png~wm0.png', width: 2048, height: 2048 }],
+      baseOptions,
+    );
+    assert.equal(first[0].filename, 'doubao_2026-11-07T12-00-00_1.png');
+    assert.equal(second[0].filename, 'doubao_2026-11-07T12-00-00_1-2.png');
+    assert.equal((await stat(first[0].filePath)).size, pngBytes.length);
+    assert.equal((await stat(second[0].filePath)).size, pngBytes.length);
+    // 不留临时文件
+    const { readdir } = await import('node:fs/promises');
+    const leftovers = (await readdir(dir)).filter((name) => name.includes('.tmp-'));
+    assert.deepEqual(leftovers, []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('G15: 单飞锁 — 并发调用立即返回 busy', async () => {
+  const slowChrome = {
+    async ensureDaemon() {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    },
+    async ensurePage() { return { pageId: 2, url: 'https://www.doubao.com/chat/' }; },
+    async evaluate(name) {
+      if (name === '01-probe') {
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        return { status: 'succeeded', isLoggedIn: true, pageUrl: 'https://www.doubao.com/chat/', pageTitle: '豆包' };
+      }
+      return { ok: true };
+    },
+    async screenshot() {},
+    async stop() {},
+  };
+
+  const firstPromise = executeDoubaoAction(
+    { mode: 'status', config: normalizeConfig({}) },
+    { chrome: slowChrome, history: [] },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const second = await executeDoubaoAction(
+    { mode: 'status', config: normalizeConfig({}) },
+    { chrome: slowChrome, history: [] },
+  );
+  assert.equal(second.status, 'busy');
+  assert.equal(second.code, 'busy');
+  assert.equal(second.activeMode, 'status');
+  // 第一个仍然正常完成，锁在 finally 里释放
+  const first = await firstPromise;
+  assert.equal(first.status, 'succeeded');
+  assert.equal(first.code, 'ok');
+  const third = await executeDoubaoAction(
+    { mode: 'status', config: normalizeConfig({}) },
+    { chrome: slowChrome, history: [] },
+  );
+  assert.equal(third.status, 'succeeded');
+});
+
+test('G16: 选择器契约快照与漂移检测', async () => {
+  const { DOUBAO_SELECTORS, DOUBAO_MARKERS, REQUIRED_SELECTORS, missingSelectors, describeContract } =
+    await import('../lib/contract.js');
+
+  // 契约表是脚本的唯一真源：每个选择器都必须真的出现在某个脚本里
+  const sources = {
+    probe: buildProbeScript().source ?? buildProbeScript(),
+    input: buildInputScript({ prompt: 'x' }).source ?? buildInputScript({ prompt: 'x' }),
+    send: buildSendScript().source ?? buildSendScript(),
+    skill: buildSkillScript().source ?? buildSkillScript(),
+    collect: buildCollectScript().source ?? buildCollectScript(),
+    newConversation: buildNewConversationScript().source ?? buildNewConversationScript(),
+    switchMode: buildSwitchWorkModeScript().source ?? buildSwitchWorkModeScript(),
+  };
+  // 脚本里的选择器可能被 JSON.stringify 转义过，比对前先把 \" 还原成 "
+  const allSource = Object.values(sources).join('\n').replace(/\\"/g, '"');
+  for (const [id, selector] of Object.entries(DOUBAO_SELECTORS)) {
+    assert.ok(allSource.includes(selector), `selector ${id} 未出现在任何页面脚本中`);
+  }
+  for (const marker of Object.values(DOUBAO_MARKERS)) {
+    assert.ok(allSource.includes(marker), `marker ${marker} 未出现在页面脚本中`);
+  }
+  // 探针确实把契约统计回传（脚本里的 census 表达式）
+  assert.match(String(sources.probe), /contract: Object\.fromEntries/);
+  assert.match(String(sources.probe), /querySelectorAll\(sel\)\.length/);
+
+  // 漂移判定
+  const healthy = Object.fromEntries(REQUIRED_SELECTORS.map((id) => [id, 1]));
+  assert.deepEqual(missingSelectors(healthy), { ok: true, missing: [], total: REQUIRED_SELECTORS.length });
+  const broken = { ...healthy, loginButton: 0, inputEditor: 0 };
+  const verdict = missingSelectors(broken);
+  assert.equal(verdict.ok, false);
+  assert.deepEqual(verdict.missing, ['loginButton', 'inputEditor']);
+  assert.equal(missingSelectors({}).ok, false);
+  assert.equal(describeContract().length, Object.keys(DOUBAO_SELECTORS).length);
+});
+
+test('G17: 页面结构漂移时返回 contract_changed 而不是超时', async () => {
+  const drifted = {
+    async ensureDaemon() {},
+    async ensurePage() { return { pageId: 3, url: 'https://www.doubao.com/chat/' }; },
+    async evaluate(name) {
+      if (name === '01-probe') {
+        return {
+          status: 'succeeded',
+          isLoggedIn: true,
+          pageUrl: 'https://www.doubao.com/chat/abc',
+          pageTitle: '豆包',
+          // 已登录但四个必需选择器全为 0 —— 典型改版
+          contract: { loginButton: 0, loginModal: 0, inputEditor: 0, sendButton: 0, skillButton: 0 },
+          images: [],
+        };
+      }
+      return { ok: true };
+    },
+    async screenshot() {},
+    async stop() {},
+  };
+  const result = await executeDoubaoAction(
+    { mode: 'generate', prompt: '一只猫', config: normalizeConfig({}) },
+    { chrome: drifted, history: [] },
+  );
+  assert.equal(result.status, 'failed');
+  assert.equal(result.code, 'contract_changed');
+  assert.deepEqual(result.details.missingSelectors, ['loginButton', 'loginModal', 'inputEditor', 'sendButton']);
 });

@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：Stage 1 已实现、离线验收 16/16 全绿、已装进 desktop profile、GUI 内直接出图跑通（DoD 五条全部达成）；2026-11-07 起浏览器后端默认走 ego lite（`browserBackend=ego`），失败回落 Chrome。** `node --test test/index.test.js` 16/16（G1–G12 + G5b，含 mock 浏览器下的成功/未登录/超时三条编排路径、scoped-ctx 服务读取、后端选择、client 结构断言与 `/file` 路由收口）；`lib/` 共 10 个模块 + `test/`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）。
+**状态：v0.3.0 — 离线验收 21/21 全绿、`npm run smoke` 通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 21/21（G1–G17 + G5b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类、原子落盘、并发单飞锁、选择器契约快照、`/file` 路由收口、client 结构断言）；`lib/` 共 12 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。四条 `/doubao-paint/*` 路由与两个 Agent 工具已在运行中的 GUI 上实测通过（见 §6.2）；真实出图 `2848×1600`、5278162 字节落盘并注入对话（见 §6.3、§6.4）；鲁棒性与发布工程见 §6.7。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -274,6 +274,37 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 5. 触碰用户自己的 space（`id 0`，`createdBy:user`）会把它翻成 `ownership:agent`，导致用户失去控制；探针误碰后用 `takeOverTaskSpace(0)` + `task.handOff()` 可还原成 `agentDelegatedToUser`（本次已还原，标签页未丢）。
 6. `ego-browser.exe` 在 `Application\<version>\` 版本目录内，升级会漂移；`resolveDefaultEgoCliPath()` 扫目录取最高版本并按安装根缓存，路径消失才重扫。**0.6.2.7 仍是 beta**。
 
+## 6.7 鲁棒性与发布工程（v0.3，2026-11-07）
+
+这一节记录「可以推荐给别人」所需的加固项，全部有代码与离线断言兜底。
+
+**① 12 个结构化状态码**（`lib/errors.js`）
+
+| code | 含义 | 触发点 |
+|---|---|---|
+| `ok` | 成功 | 正常返回 |
+| `login_required` | 豆包未登录 | probe / 技能 / 轮询三处登录墙 |
+| `no_image` | 超时且无图 | 轮询到期仍无合格图（带 `tailText` 末 800 字） |
+| `partial` | 部分图失败 | 下载阶段有成功也有失败（`savedCount` / `failedCount`） |
+| `download_failed` | 图全下载失败 | 同上，成功数为 0 |
+| `busy` | 已有生成在跑 | 单飞锁命中（带 `activeRequestId` / `activeMode` / `activeSince`） |
+| `cancelled` | 调用被取消 | `AbortError` / `signal.aborted` |
+| `cli_missing` | 后端 CLI 不存在 | ego / chrome 探测失败、`ENOENT` |
+| `backend_unavailable` | 无可用后端 | `/doubao-paint/status` 返回 503 |
+| `contract_changed` | 豆包改版 | 必需选择器缺失、输入/发送未生效 |
+| `rate_limited` | 被限流 | 429 / rate limit / 验证码关键词 |
+| `unknown` | 其他 | 兜底 |
+
+**② 并发单飞锁**：`lib/orchestrator.js` 的模块级 `activeRun` + `getActiveRun()`。第二次并发调用立即拿到 `busy`，不再出现「两个实例各自点同一个豆包标签页」的互相踩踏；`request.skipLock` 保留给壳层内部复用。
+
+**③ 落盘原子性 + 重名保护**：`lib/download.js` 的 `writeFileAtomic`（同目录 `.tmp-<8hex>` + `rename`）与 `uniqueFilePath`（`_1.png` 已存在则 `_1-2.png`…），避免半截文件与同秒重名覆盖。
+
+**④ 选择器契约漂移检测**：`lib/contract.js` 把 8 个 `data-testid` 与 2 个图片特征收敛成单一真源；`buildProbeScript` 会回报每个选择器的命中数，`missingSelectors()` 判定 `loginButton` / `loginModal` / `inputEditor` / `sendButton` 是否缺失 → 缺失即 `contract_changed`（错误文案直接提示升级插件或反馈 issue）。G16 还会校验「契约表里的每个选择器都真的出现在页面脚本源码里」，防止改了表忘了改脚本。
+
+**⑤ 超时预算统一**：`resolveToolTimeoutMs(config.timeoutMs)` 把工具超时按 `配置 + 30s` 夹到 `60s…300s`（120s 配置 → 150s 工具超时）；轮询内部只用 `timeoutMs × 0.85` 的预算，给截图、下载、附件注入留出余量；单图下载另有 `DOWNLOAD_TIMEOUT_MS = 45s` 并和外部 `AbortSignal` 合并。
+
+**⑥ 发布工程**：`npm run smoke`（`scripts/smoke.mjs --offline`，7 项离线检查，输出 JSON）、`npm run verify`（测试 + 冒烟）、`.github/workflows/ci.yml`（Ubuntu/Windows × Node 20/22：`npm test` → 冒烟 → `npm pack --dry-run` → 断言发布包内不含内部设计文档）。
+
 ## 7. 目录（已落盘的实际结构）
 
 ```
@@ -284,11 +315,15 @@ dsh-doubao-paint/
   lib/ego-cli.js        ego lite 适配层（exe 探测 / .mjs 脚本通道 / TaskSpace 生命周期 / 空间释放）
   lib/prompt.js         提示词组装、风格解析、输出目录、文件名前缀
   lib/doubao-page.js    页面脚本（wait-ready / probe / 切模式 / 新会话 / 技能 / 输入 / 发送 / 取图 / 尾文本）+ 选图打分
-  lib/orchestrator.js   一次生成的完整时序（E1–E11）
-  lib/download.js       宿主侧下载、落盘、附件注入、history
-  lib/constants.js      比例 / 风格 / 默认值 / 系统提示词（client 复用同一份）
+  lib/orchestrator.js   一次生成的完整时序（E1–E11）+ 单飞锁 + 后端选择 + 契约判定
+  lib/download.js       宿主侧下载、原子落盘、附件注入、history
+  lib/errors.js         12 个状态码表、PaintError、classifyError、failureResult
+  lib/contract.js       豆包页面选择器契约（8 选择器 + 2 特征）+ 缺失判定
+  lib/constants.js      比例 / 风格 / 默认值 / 超时预算 / 系统提示词（client 复用同一份）
   lib/client.js         触发条 + 面板（1057 行，自包含 IIFE + ModuleLoader）
-  test/index.test.js    离线断言（node --test test/index.test.js，15 项）
+  scripts/smoke.mjs     离线冒烟（7 项检查，CI 复用）
+  test/index.test.js    离线断言（node --test test/index.test.js，21 项）
+  .github/workflows/ci.yml  CI：测试 + 冒烟 + 打包内容检查
   locale/zh.json        配置项文案（11 字段）
   locale/en.json
   cordis.patch.yml      以 id `doubao-paint` 挂载 dsh-doubao-paint

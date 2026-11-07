@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ['20.x', '22.x']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # 本插件没有运行时依赖（peerDependencies 由 DSH 宿主提供），
+      # 因此用 `npm ci || npm install` 兼容「有/无 lockfile」两种仓库形态。
+      - name: Install
+        run: npm ci || npm install
+
+      - name: Unit tests (offline)
+        run: npm test
+
+      - name: Smoke checks (offline)
+        run: node scripts/smoke.mjs --offline
+
+      - name: Pack contents (no internal docs)
+        run: npm pack --dry-run
+
+      - name: Package must not ship design docs
+        shell: bash
+        run: |
+          npm pack --dry-run --json > pack.json
+          if grep -qE '设计方案|复刻清单|handoff' pack.json; then
+            echo "::error::发布包内含内部设计文档"
+            exit 1
+          fi
