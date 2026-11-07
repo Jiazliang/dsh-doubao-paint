@@ -5,7 +5,7 @@
 
 **本项目是 [`xt765/dsh-doubao-image`](https://github.com/xt765/dsh-doubao-image) 的功能复刻与重构版本**，非官方分支，与原作者无隶属关系。功能设计、工具契约与业务逻辑来源见 [参考与致谢](#9-参考与致谢credits)。
 
-**状态：v1.2.1 — 离线验收 31/31 全绿、`npm run smoke`（15 项）通过、CI 矩阵（Ubuntu/Windows × Node 20/22）就绪、已装进 desktop profile 并在 GUI 内真实出图跑通（DoD 五条全部达成）。** 浏览器后端默认 `browserBackend=auto`：探测到本机 ego lite 就走 ego，否则回落 Chrome（见 §6.6）。`node --test test/index.test.js` 31/31（G1–G26 + G5b + G17b：编排三条路径、scoped-ctx 服务读取、后端选择、错误码归类与双语文案、原子落盘、并发单飞锁、选择器契约快照与两段漂移检测、`/file` 路由收口、history 持久化、`.runs` 保留策略、环境体检、client 结构/i18n/a11y 断言、命令参数解析与技能注册、三适配器同契约、命令图卡渲染、工具图卡与折叠详情）；`lib/` 共 14 个模块 + `test/` + `scripts/smoke.mjs`，逐项对照见 [复刻清单.md](复刻清单.md)，技术细节见 [设计方案.md](设计方案.md)，交接见 [handoff.md](handoff.md)。鲁棒性与发布工程见 §6.7，P1 能力见 §6.8，P2 普适性与无障碍见 §6.9，工具/命令/面板三入口合一见 §6.10，v1.2 的图卡与转交模型见 §6.11。
+**状态：v1.3.0 — 离线验收 30/30 全绿、`npm run smoke`（13 项）通过、CI 矩阵就绪；命令面已移除，只保留 `/doubao-paint` 技能手势；已装进 desktop profile 并真机出图。
 
 **分两步走（用户 2026-11-06 定，不可跨越）：**
 1. **Stage 1 — 完整复刻原插件的所有功能**，已知缺陷照搬不改，验收＝[复刻清单.md](复刻清单.md) A–G 全表 + DoD 五条；
@@ -345,7 +345,7 @@ daemon 归属判定同样实测成立：`status` 报 `args=["--viaCli","--no-hea
 
 ## 6.10 三个入口同一条通道（v1.1，2026-11-07）
 
-v1.1 的主题是**入口多样、通道唯一**：工具调用、人类命令 `/doubao-paint`、前端面板按钮三条路都收敛到同一个函数、同一份结果契约、同一套渲染器。
+v1.1 起主题是**入口多样、通道唯一**：Agent 工具、`/doubao-paint` 技能手势、前端面板按钮三条路都收敛到同一个函数、同一份结果契约、同一套渲染器。v1.3.0 起**命令面整体移除**——`/doubao-paint` 不再是 host command，而是 runtime 技能手势。
 
 **① 唯一入口**（`lib/entry.js`）
 
@@ -361,21 +361,19 @@ submitPaintRequest(request, deps)          // 工具 execute / 命令 handler / 
 
 **② 三个哑适配器**（`lib/render.js`）：`renderToolResult` / `renderCommandResult` / 路由的 `sendJson`。适配器只翻译格式，**不判断状态、不拼文案**。`PaintOutcome` 字段沿用 v1.0 的 `{status, code, message, requestId, mode, images[], imageCount, outputDir, screenshots[], health?}`。
 
-**③ 人类命令**（`lib/commands.js`）
+**③ 技能手势**（`lib/skill.js`，v1.3.0 起唯一的人类入口）
 
 ```
-/doubao-paint <画面描述> [--ratio 16:9] [--style cyberpunk] [--count 2] [--neg 避免内容] [--dir 目录] [--reuse]
+/doubao-paint <画面描述>
 ```
 
-支持 `--flag value` 与 `--flag=value`、引号成对剥离；未知 flag 原样留在提示词里；`--reuse` 复用当前会话（否则每次新对话）。命令走宿主 `commands` 服务，**零模型回合**（`execute` 不经模型），日志里记 `command/run` / `command/done`。
-
-**④ 命令也能显示图卡**（`lib/client.js`）：命令 `text` = 人读摘要 + 一行机器可读 JSON（前缀 `doubao-paint:v1 `，含 `images[{filename,previewUrl,width,height,sizeBytes}]`）。客户端注册 keyed slot `conversation.chat.commandview`（key = `doubao-paint`）解析尾行渲染图卡，图源走 `/doubao-paint/file?id=`（v1.0 已收口）。CLI / 远程终端里同一命令只有文本（`GenericCommandCard` 路径）——**同一份 outcome、不同渲染器**，不是分叉逻辑。
+用户发出这条消息后，宿主按 `SKILL_GESTURE` 识别 `/doubao-paint` 手势并把技能说明注入本回合，模型据此**先补全提示词、再调 `doubao_generate_image`**——与「直接说画什么」走完全相同的路径，不存在客户端代提交、也不需要任何命令渲染器。
 
 **⑤ runtime 技能**（`lib/skill.js`）：注册名为 `doubao-paint` 的技能（`modelInvocable` + `userInvocable` 双真），内容说明「何时该调工具、参数怎么写、比例风格放参数而不是提示词、结果状态怎么读」。技能不是执行体，只是教模型在正确的时机调用同一个工具。
 
 **⑥ 一致性可回归**：G21 把同一份 outcome 喂给两个适配器，断言 `status` / `outputDir` / 图片数完全相同；G24 在假 DOM 里渲染命令视图，断言图卡 `src` 与摘要不含载荷行。
 
-## 6.11 图卡与转交模型（v1.2，2026-11-07）
+## 6.11 图卡（v1.2 起，v1.3.0 只保留工具图卡）
 
 v1.2 解决三件事：工具结果不再挤缩略图、命令能让模型先细化提示词、生图完成后面板自动刷新。
 
@@ -387,31 +385,10 @@ v1.2 解决三件事：工具结果不再挤缩略图、命令能让模型先细
   + `<details>` 折叠的完整 JSON（默认收起）。图片走 `/doubao-paint/file?id=`，与命令图卡同一收口。
 - `renderToolResult` 因此**只输出文字块**：工具结果是给模型/终端看的详细信息，视觉呈现交给图卡。
 
-### 6.11.2 `/doubao-paint` 改为「转交模型」
-
-| 命令 | 行为 | 适用 |
-| --- | --- | --- |
-| `/doubao-paint <描述> [--ratio …]` | 命令只产出「先细化提示词再调工具」的指令，命令图卡用 `inputActions` 写进输入框并**自动提交**，由模型接收后细化再调工具 | 人在 Web UI 里想看模型补全后的效果 |
-| `/doubao-paint-direct <描述>` | 零模型回合，直接操控豆包网页生图 | CLI / 远程终端 / 脚本 |
-
-两条命令共用 `parseCommandArgs`（`--ratio` / `--style` / `--count` / `--neg` / `--dir` / `--prefix` / `--reuse`）。
-转交载荷前缀 `doubao-paint:relay:v1 `，与命令载荷 `doubao-paint:v1 ` 一样是尾行、人读摘要在前，
-终端里看不到「已转交」之外的实现细节。
-
 ### 6.11.3 面板事件刷新
 
 生图完成后图卡派发 `dsh-doubao-paint:generated`（`window.dispatchEvent`），面板收到后重新拉
 `/doubao-paint/status` 更新 history——事件驱动，不轮询、不空转。
-
-#### 6.11.4 转交失败的三重兜底（v1.2.1）
-
-真机复验发现：`conversation.chat.commandview` 的组件拿不到 `inputActions` prop（另两处 UI 槽能拿到），于是「替用户按下发送」静默失败。
-
-| 层 | 做法 |
-| --- | --- |
-| 缓存 | 触发条/面板拿到 `inputActions` 时按 `sessionId` 登记，命令卡片取回（`rememberInputActions` / `lookupInputActions`） |
-| 探测 | 写草稿、持久化、发送各按候选方法名逐个试，不假设 `setDraft` / `submit` 一定存在 |
-| 重试 + 可见 | 最多 5 次 × 400ms；仍失败则卡片显示具体原因（如 `missing-submitter`）并给出「重试」按钮 |
 
 ## 7. 目录（已落盘的实际结构）
 

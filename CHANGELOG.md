@@ -2,6 +2,18 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0] — 2026-11-07
+
+### 移除
+- 删除 `lib/commands.js` 与宿主 `commands` 注册：`/doubao-paint` 与 `/doubao-paint-direct` 都不再是命令。
+- 删除 `conversation.chat.commandview` 槽位、命令图卡组件、`splitCommandText`、`COMMAND_PAYLOAD_PREFIX`、`submitRelayInstruction(Detailed)`、`inputActions` 旁路缓存及其 CSS/locale 键。
+- `lib/render.js` 移除 relay 五件套（`RELAY_PAYLOAD_PREFIX`/`renderRelayResult`/`encodeRelayPayload`/`decodeRelayPayload`/`buildRefineInstruction`）。
+
+### 变更
+- `/doubao-paint <描述>` 改为 **runtime 技能手势**：宿主按 `SKILL_GESTURE` 注入 `skill_content`，模型先补全提示词再调 `doubao_generate_image`；与「直接说画什么」走同一条路径。
+- `inject` 收敛为 `['tools','attachments','skills']`；`lib/skill.js` 内容改为手势说明（含「不要把斜杠命令写进 prompt」）。
+- 离线验收 30/30；冒烟 13 项（`skill gesture` + `no command surface` 取代原命令检查）。
+
 ## [1.2.1] — 2026-11-07
 
 ### 修复

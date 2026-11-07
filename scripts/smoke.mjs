@@ -128,62 +128,22 @@ await check('unified entry', () => {
   if (typeof mod.submitPaintRequest !== 'function') throw new Error('submitPaintRequest missing');
   return `${request.mode} / max ${request.maxImages}`;
 });
-
-await check('command + skill', () => {
-  const parsed = mod.parseCommandArgs('一只猫 --ratio 16:9 --count 2 --reuse');
-  if (parsed.prompt !== '一只猫') throw new Error('command prompt parse broken');
-  if (parsed.aspectRatio !== '16:9') throw new Error('command --ratio broken');
-  if (parsed.maxImages !== 2) throw new Error('command --count broken');
-  if (parsed.newConversation !== false) throw new Error('command --reuse broken');
-  if (mod.PAINT_COMMAND_NAME !== 'doubao-paint') throw new Error('command name broken');
-  if (mod.PAINT_SKILL?.invocation?.modelInvocable !== true) throw new Error('skill invocation broken');
-  if (!mod.PAINT_SKILL.content.includes('doubao_generate_image')) throw new Error('skill content broken');
-  return `${mod.PAINT_COMMAND_NAME} / skill ${mod.PAINT_SKILL.name}`;
+await check('skill gesture', () => {
+  if (mod.PAINT_SKILL?.invocation?.modelInvocable !== true) throw new Error('skill not model-invocable');
+  if (mod.PAINT_SKILL?.invocation?.userInvocable !== true) throw new Error('skill not user-invocable');
+  if (!mod.PAINT_SKILL.content.includes('doubao_generate_image')) throw new Error('skill content lost tool name');
+  if (!mod.PAINT_SKILL.content.includes('/doubao-paint')) throw new Error('skill content lost gesture name');
+  if (!mod.PAINT_SKILL.content.includes('不要')) throw new Error('skill content lost prompt discipline');
+  return `${mod.PAINT_SKILL.name} / gesture only`;
 });
-
-await check('adapter parity', () => {
-  const outcome = {
-    status: 'succeeded',
-    code: 'ok',
-    message: 'ok',
-    prompt: '猫',
-    outputDir: 'out',
-    imageCount: 1,
-    images: [{ filename: 'a.png', previewUrl: '/doubao-paint/file?id=a.png', width: 8, height: 8, sizeBytes: 1024 }],
-  };
-  const tool = JSON.parse(mod.renderToolResult(outcome)[0].text);
-  const command = mod.decodeCommandPayload(mod.renderCommandResult(outcome).text);
-  if (tool.status !== command.status) throw new Error('status mismatch between adapters');
-  if (tool.images.length !== command.images.length) throw new Error('image count mismatch');
-  if (tool.outputDir !== command.outputDir) throw new Error('outputDir mismatch');
-  return `status ${tool.status} / ${tool.images.length} image`;
-});
-
-await check('relay command', () => {
-  if (mod.PAINT_DIRECT_COMMAND_NAME !== 'doubao-paint-direct') throw new Error('direct command name broken');
-  const args = mod.parseCommandArgs('一只猫 --ratio 16:9');
-  const relayed = mod.renderRelayResult({
-    ...args,
-    style: 'auto',
-    maxImages: 4,
-    newConversation: true,
-    instruction: mod.buildRefineInstruction({ ...args, style: 'auto' }),
-  });
-  if (relayed.kind !== 'success') throw new Error('relay command kind broken');
-  const payload = mod.decodeRelayPayload(relayed.text);
-  if (!payload) throw new Error('relay payload did not round-trip');
-  if (!payload.instruction.includes('doubao_generate_image')) throw new Error('relay instruction missing tool name');
-  if (mod.decodeRelayPayload('no payload here') !== null) throw new Error('relay decoder too permissive');
-  return `${mod.PAINT_COMMAND_NAME} → relay / direct ${mod.PAINT_DIRECT_COMMAND_NAME}`;
-});
-
-await check('client slots', async () => {
+await check('no command surface', async () => {
+  for (const name of ['registerPaintCommand', 'parseCommandArgs', 'renderCommandResult']) {
+    if (typeof mod[name] !== 'undefined') throw new Error(`command surface still exported: ${name}`);
+  }
   const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
-  if (!source.includes('"conversation.chat.commandview"')) throw new Error('commandview slot registration missing');
-  if (!source.includes('"tool.call.toolview"')) throw new Error('toolview slot registration missing');
-  if (!source.includes('"dsh-doubao-paint:generated"')) throw new Error('generated event missing');
-  if (!source.includes('doubao_generate_image')) throw new Error('toolview key missing');
-  return 'commandview + toolview';
+  if (source.includes('conversation.chat.commandview')) throw new Error('commandview slot still registered');
+  if (!source.includes('tool.call.toolview')) throw new Error('toolview slot missing');
+  return 'commands removed / toolview kept';
 });
 
 const failed = checks.filter((item) => !item.ok);
