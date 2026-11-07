@@ -1405,6 +1405,20 @@ test('G18：history 持久化（落盘 / 读回 / 坏 JSON / 合并去重 / 上�
     );
     assert.deepEqual(merged.map((item) => item.filename), ['b.png', 'c.png', 'a.png']);
 
+    // 同一张图内存那份缺 workspace 时，用磁盘副本补齐（否则面板仍显示「未标记工作区」）
+    const enriched = mergeHistory(
+      [{ filePath: 'd.png', filename: 'd.png', workspace: 'D:\\work\\proj-a' }],
+      [{ filePath: 'd.png', filename: 'd.png' }],
+    );
+    assert.equal(enriched.length, 1);
+    assert.equal(enriched[0].workspace, 'D:\\work\\proj-a');
+    // 内存那份已有 workspace 时以内存为准（新的优先），不用磁盘覆盖
+    const keptOwn = mergeHistory(
+      [{ filePath: 'e.png', filename: 'e.png', workspace: 'D:\\work\\proj-b' }],
+      [{ filePath: 'e.png', filename: 'e.png', workspace: 'D:\\work\\proj-a' }],
+    );
+    assert.equal(keptOwn[0].workspace, 'D:\\work\\proj-a');
+
     // 上限
     const many = Array.from({ length: 40 }, (_, index) => ({ filePath: `m${index}.png`, filename: `m${index}.png` }));
     assert.equal(mergeHistory([], many).length, 30);
@@ -1456,8 +1470,9 @@ test('G18b：旧记录按 filePath 回填 workspace', async () => {
 });
 
 test('G18c：groupHistoryByWorkspace 分组、置顶、计数与截断', () => {
-  const wsA = 'D:\\work\\proj-a';
-  const wsB = 'D:\\work\\proj-b';
+  // 用平台无关路径：POSIX 上 path.basename('D:\work\proj-a') 取不到末段
+  const wsA = path.resolve('work', 'proj-a');
+  const wsB = path.resolve('work', 'proj-b');
   const mk = (id, workspace, createdAt) => ({ id, workspace, createdAt, previewUrl: `/doubao-paint/file?path=${id}` });
   const list = [
     mk('b1', wsB, '2026-11-07T10:00:00.000Z'),
@@ -1491,7 +1506,7 @@ test('G18c：groupHistoryByWorkspace 分组、置顶、计数与截断', () => {
   assert.deepEqual(groupHistoryByWorkspace(undefined), []);
 
   // 标签取路径末段，去尾部分隔符
-  assert.equal(workspaceLabel('D:\\work\\proj-a\\'), 'proj-a');
+  assert.equal(workspaceLabel(`${wsA}${path.sep}`), 'proj-a');
   assert.equal(workspaceLabel('   '), '未标记工作区');
 });
 

@@ -12,6 +12,11 @@
 - 修复：面板状态条的 15 秒自动收回在无定时器环境（离线 vm 沙箱）下抛 `ReferenceError: setTimeout is not defined`，改为全程 `typeof` 守卫、按注入的 `timers` 取用。
 - 工具：新增 `scripts/sync-profile.mjs`（`npm run sync:profile`），把工作区代码按 SHA256 同步进 `~/.dsh/profiles/desktop/node_modules/dsh-doubao-paint` 副本；宿主加载的是副本而非源码，改完要「同步 + 重启」两步才生效。
 
+## [1.4.1] — 2026-11-07
+
+- 修复：面板仍把旧图显示成「未标记工作区」。`mergeHistory` 去重时保留了内存里缺少 `workspace` 的旧记录，把磁盘上已回填的那份丢掉了；现在用磁盘副本补齐 `workspace` / `sessionId`，内存已有值时以内存为准。
+- 修复：离线测试 G18c 用 Windows 绝对路径断言分组标签，POSIX 上 `path.basename` 取不到末段导致 CI 红；改用 `path.resolve` / `path.sep` 构造平台无关路径。
+
 ## [Unreleased]
 
 - 后续方向：契约自动巡检（定时探活 + 变更告警）、多账号并发配额、面板历史筛选。
