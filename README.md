@@ -4,7 +4,7 @@
 
 用本机浏览器操控豆包网页版生成图片：下载高清原图（通常 2848×1600、无水印源）、放进对话附件、存到输出目录，并把结果同时呈现在会话、工具图卡和输入框下方的面板里。
 
-- 版本 **1.4.4** · 离线测试 **34 项** · 冒烟 **13 项**
+- 版本 **1.5.0** · 离线测试 **43 项** · 冒烟 **13 项**
 - 浏览器后端：优先本机 **ego lite**，没有则用 **Chrome + chrome-devtools-mcp**
 - 已真机跑通：`/doubao-paint <描述>` → 补全提示词 → 生图 → 落盘 + 附件 + 面板记录
 
@@ -14,10 +14,10 @@
 
 ```text
 # A. GitHub 直装（推荐，可换版本号或 ref）
-action=install_bundle, target=github:Jiazliang/dsh-doubao-paint#v1.4.4
+action=install_bundle, target=github:Jiazliang/dsh-doubao-paint#v1.5.0
 
 # B. Release 包（离线可传阅）
-action=install_bundle, target=https://github.com/Jiazliang/dsh-doubao-paint/releases/download/v1.4.4/dsh-doubao-paint-1.4.4.tgz
+action=install_bundle, target=https://github.com/Jiazliang/dsh-doubao-paint/releases/download/v1.5.0/dsh-doubao-paint-1.5.0.tgz
 ```
 
 装完重启 DSH，然后首次登录豆包：
@@ -39,7 +39,7 @@ doubao_image_status({ openLoginIfNeeded: true })
 |---|---|---|
 | **`/doubao-paint <画面描述>`** | 技能手势 | 日常主入口；描述不完整时最有用，模型会先补全提示词 |
 | **`doubao_generate_image`** | Agent 工具 | 模型自己决定要出图时（与手势同一条路径） |
-| **输入框下方「豆包网页生图」面板** | 前端 UI | 手动填参数、按工作区看历史、引用路径 |
+| **输入框下方「豆包生图」面板** | 前端 UI | 手动填参数、按工作区看历史、引用路径 |
 
 面板里的「✨ 插入对话让 Agent 生图」会把参数整理成一条技能手势写进输入框（形如 `/doubao-paint 一只橘猫（比例：16:9，风格：电影级 CG）`），你确认后再发送。
 

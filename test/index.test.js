@@ -7,9 +7,9 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 
@@ -43,6 +43,8 @@ import {
   renderToolResult,
   PAINT_SKILL,
   registerPaintSkill,
+  resolveRequestWorkspace,
+  resolveWorkspaceBySessionId,
 } from '../lib/index.js';
 import { sanitizeFilenamePrefix } from '../lib/prompt.js';
 import {
@@ -77,6 +79,7 @@ import {
   loadHistory,
   mergeHistory,
   pruneRunDirs,
+  repairFallbackWorkspace,
   saveHistory,
   workspaceLabel,
 } from '../lib/history.js';
@@ -90,7 +93,7 @@ test('G1: normalizeConfig 归一化 + volatile 解包 + 超时夹取', () => {
   assert.equal(defaults.doubaoUrl, 'https://www.doubao.com/chat/');
   assert.equal(defaults.defaultAspectRatio, '16:9');
   assert.equal(defaults.defaultStyle, 'auto');
-  assert.equal(defaults.outputDir, 'doubao_images');
+  assert.equal(defaults.outputDir, path.join(homedir(), '.dsh', 'dsh-doubao-paint', 'images'));
   assert.equal(defaults.timeoutMs, 120000);
   assert.equal(defaults.keepTab, true);
   assert.equal(defaults.injectSystemPrompt, true);
@@ -324,7 +327,7 @@ test('G5: executeDoubaoAction 成功路径落盘/附件/历史/render', async ()
       prompt: '一只赛博橘猫',
       aspectRatio: '1:1',
       style: 'cyberpunk',
-      config: { outputDir: dir, timeoutMs: 30000, keepTab: true },
+      config: { outputDir: dir, timeoutMs: 30000, keepTab: true, attachImages: true },
     },
     {
       ctx: {
@@ -416,7 +419,7 @@ test('G5b: ctx 未 inject 服务时属性访问抛错，readService 仍能取到
       mode: 'generate',
       prompt: '一只猫',
       aspectRatio: '1:1',
-      config: { outputDir: dir, timeoutMs: 30000, keepTab: true },
+      config: { outputDir: dir, timeoutMs: 30000, keepTab: true, attachImages: true },
     },
     { ctx: strictCtx, history, chrome, fetchImage, cwd: dir },
   );
@@ -544,8 +547,9 @@ function makeFakeHostCtx() {
 }
 
 test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-apply-'));
   const { ctx, registered } = makeFakeHostCtx();
-  apply(ctx, { enabled: true });
+  apply(ctx, { enabled: true, outputDir: dir });
 
   assert.equal(registered.locale.length, 1);
   assert.equal(registered.locale[0].ns, 'plugin-config.doubao-paint');
@@ -646,6 +650,8 @@ test('G7: apply 注册 2 个工具 / 1 条 systemPrompt / 4 条路由 / locale',
   apply(disabled.ctx, { enabled: false });
   assert.equal(disabled.registered.tools.length, 0);
   assert.equal(disabled.registered.routes.length, 0);
+
+  await rm(dir, { recursive: true, force: true });
 });
 
 // ── G8 client 面板模块结构性验收（假 require，不起浏览器） ─────────────────
@@ -813,11 +819,11 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
   assert.equal(chipCollapsed.props['data-dsh-doubao-chip'], 'collapsed');
   assert.equal(chipCollapsed.props['aria-expanded'], false);
   const chipText = chipCollapsed.props.children.map((child) => child?.props?.children ?? '').join('|');
-  assert.ok(chipText.includes('豆包网页生图'), chipText);
+  assert.ok(chipText.includes('豆包生图'), chipText);
   // 无障碍：按钮化 + 可键盘激活 + 屏幕阅读器提示
   assert.equal(chipCollapsed.props.role, 'button');
   assert.equal(chipCollapsed.props.tabIndex, 0);
-  assert.match(String(chipCollapsed.props['aria-label'] || ''), /豆包网页生图工坊/);
+  assert.match(String(chipCollapsed.props['aria-label'] || ''), /豆包生图/);
   assert.match(String(chipCollapsed.props.title || ''), /展开/);
   assert.equal(typeof chipCollapsed.props.onKeyDown, 'function');
   let prevented = false;
@@ -899,8 +905,59 @@ test('G8: client buildModule 导出与格式/注册结构正确', async () => {
   assert.doesNotMatch(
     textOf(groupedDock),
     /group-\d+\.png/,
-    '卡片条只放「引用路径」，不再显示文件名（文件名太长会挤坏排版）',
+    '卡片条只放「引用路径」，不显示文件名（文件名太长会挤坏排版）',
   );
+
+  // 右下角浮层只剩「引用路径」；删除是图片右上角独立的「×」角标
+  const cardBars = dockNodes.filter(
+    (node) => node.props && node.props.className === 'dsh-dbimg-card-bar',
+  );
+  assert.equal(cardBars.length, 6, '每张缩略图都要有「引用路径」浮层容器');
+  const barButtons = dockNodes.filter(
+    (node) =>
+      node.type === 'button' &&
+      typeof node.props.className === 'string' &&
+      node.props.className.includes('dsh-dbimg-mini-btn'),
+  );
+  assert.equal(barButtons.length, 6, '「引用路径」按钮仍留在右下角浮层里');
+  const cards = dockNodes.filter((node) => node.props && node.props.className === 'dsh-dbimg-card');
+  assert.equal(cards.length, 6);
+  const closeButtons = dockNodes.filter(
+    (node) => node.type === 'button' && node.props.className === 'dsh-dbimg-card-close',
+  );
+  assert.equal(closeButtons.length, 6, '每张图都要有右上角「×」删除角标');
+  assert.equal(closeButtons[0].props.children, '×', '角标用文本 ×（U+00D7），不用 emoji');
+  assert.equal(closeButtons[0].props['data-dsh-doubao-remove-image'], groupImages[0].filePath);
+  assert.equal(closeButtons[0].props['aria-label'], '删除');
+  assert.match(String(closeButtons[0].props.title), /本地文件/, '二次确认文案必须说明会删本地文件');
+  assert.equal(typeof closeButtons[0].props.onClick, 'function');
+  for (const card of cards) {
+    const children = Array.isArray(card.props.children)
+      ? card.props.children
+      : [card.props.children];
+    assert.equal(
+      children.filter((child) => child && child.props && child.props.className === 'dsh-dbimg-card-close')
+        .length,
+      1,
+      '「×」必须是卡片的直接子元素（不是右下角浮层的一员）',
+    );
+    assert.equal(
+      children.filter((child) => child && child.props && child.props.className === 'dsh-dbimg-card-bar')
+        .length,
+      1,
+      '右下角浮层容器仍是卡片的直接子元素',
+    );
+  }
+  for (const bar of cardBars) {
+    const children = Array.isArray(bar.props.children) ? bar.props.children : [bar.props.children];
+    assert.equal(
+      children.filter(
+        (child) => child && child.props && child.props['data-dsh-doubao-remove-image'] !== undefined,
+      ).length,
+      0,
+      '「×」不能再放在右下角浮层内',
+    );
+  }
   assert.equal(groupHeads[0].props['data-dsh-doubao-group'], 'D:\\work\\proj-a');
   assert.equal(groupHeads[0].props['aria-expanded'], 'true', '当前工作区默认展开');
   assert.equal(groupHeads[1].props['aria-expanded'], 'false', '其它工作区默认折叠');
@@ -936,7 +993,7 @@ test('G9: Config 校验 / 文件名前缀 / 输出目录 / CLI 解析', () => {
 
   assert.equal(resolveOutputDirectory('out', '/tmp/ws'), path.resolve('/tmp/ws', 'out'));
   assert.equal(resolveOutputDirectory('/abs/dir', '/tmp/ws'), '/abs/dir');
-  assert.equal(resolveOutputDirectory('', '/tmp/ws'), path.resolve('/tmp/ws', 'doubao_images'));
+  assert.equal(resolveOutputDirectory('', '/tmp/ws'), path.join(homedir(), '.dsh', 'dsh-doubao-paint', 'images'));
 
   assert.ok(resolveDefaultChromeCliPath().length > 0);
   assert.equal(resolveDefaultChromeCliPath('  /custom/cli  '), '/custom/cli');
@@ -1281,8 +1338,17 @@ test('G15: 单飞锁 — 并发调用立即返回 busy', async () => {
 });
 
 test('G16: 选择器契约快照与漂移检测', async () => {
-  const { COMPOSER_SELECTORS, DOUBAO_SELECTORS, DOUBAO_MARKERS, REQUIRED_SELECTORS, missingSelectors, describeContract } =
-    await import('../lib/contract.js');
+  const {
+    COMPOSER_SELECTORS,
+    DOUBAO_SELECTORS,
+    DOUBAO_MARKERS,
+    HARD_SELECTORS,
+    SHELL_HARD_SELECTORS,
+    SOFT_SELECTORS,
+    missingSelectors,
+    softDegradations,
+    describeContract,
+  } = await import('../lib/contract.js');
 
   // 契约表是脚本的唯一真源：每个选择器都必须真的出现在某个脚本里
   const sources = {
@@ -1306,81 +1372,303 @@ test('G16: 选择器契约快照与漂移检测', async () => {
   assert.match(String(sources.probe), /contract: Object\.fromEntries/);
   assert.match(String(sources.probe), /querySelectorAll\(sel\)\.length/);
 
-  // 漂移判定
-  const healthy = Object.fromEntries(REQUIRED_SELECTORS.map((id) => [id, 1]));
-  assert.deepEqual(missingSelectors(healthy), { ok: true, missing: [], total: REQUIRED_SELECTORS.length });
-  // 骨架缺失（探针阶段）
-  const broken = { ...healthy, workspaceChip: 0 };
-  const verdict = missingSelectors(broken);
+  // 漂移判定（P1：契约分级 —— hard 才判失败，soft 只进 degraded）
+  const healthy = Object.fromEntries(HARD_SELECTORS.map((id) => [id, 1]));
+  assert.deepEqual(missingSelectors(healthy), {
+    ok: true,
+    missing: [],
+    total: HARD_SELECTORS.length,
+  });
+  // hard 缺失（输入框）→ 判失败
+  const hardBroken = { ...healthy, inputEditor: 0 };
+  const verdict = missingSelectors(hardBroken);
   assert.equal(verdict.ok, false);
-  assert.deepEqual(verdict.missing, ['workspaceChip']);
-  // 输入区缺失（对话打开后单独判定，不算骨架失败）
+  assert.deepEqual(verdict.missing, ['inputEditor']);
+  // soft 缺失（工作区 chip / 新建会话 / 技能按钮）→ 不判失败，只降级
+  const softBroken = {
+    ...healthy,
+    loginButton: 1,
+    loginModal: 1,
+    workMode: 1,
+    workspaceChip: 0,
+    newConversation: 0,
+    skillButton: 0,
+  };
+  assert.equal(missingSelectors(softBroken, SHELL_HARD_SELECTORS).ok, true);
+  assert.deepEqual(softDegradations(softBroken), ['workspaceChip', 'newConversation', 'skillButton']);
+  // 输入区单独判定（对话打开后）：送发按钮此时还没渲染，不算本阶段必需
   const composerBroken = { workspaceChip: 1, newConversation: 1, inputEditor: 0, sendButton: 0 };
-  assert.equal(missingSelectors(composerBroken).ok, true);
+  assert.equal(missingSelectors(composerBroken, COMPOSER_SELECTORS).ok, false);
   assert.deepEqual(missingSelectors(composerBroken, COMPOSER_SELECTORS).missing, ['inputEditor']);
+  // 空探针 → hard 全缺
   assert.equal(missingSelectors({}).ok, false);
   assert.equal(describeContract().length, Object.keys(DOUBAO_SELECTORS).length);
+  // 分级表本身可审：hard 只有「能写进去」和「能发出去」
+  assert.deepEqual([...HARD_SELECTORS].sort(), ['inputEditor', 'sendButton']);
+  assert.equal(SOFT_SELECTORS.length, Object.keys(DOUBAO_SELECTORS).length - HARD_SELECTORS.length);
+  assert.deepEqual([...SHELL_HARD_SELECTORS], []);
 });
 
-test('G17: 页面结构漂移时返回 contract_changed 而不是超时', async () => {
-  const drifted = {
+// ── P1/P2：伪页面变体（契约分级 / 错误语义 / 失败取证）──────────────────────
+/**
+ * 伪页面变体工厂：用桩模拟「豆包改版后的不同形态」，只验证编排层的降级与失败语义。
+ *
+ * 硬约束：outputDir 恒为 mkdtemp 临时目录——验收绝不碰生产目录
+ * `C:\Users\Jiaz\.dsh\dsh-doubao-paint\`。
+ *
+ * @param {{
+ *   contract?: Record<string, number>|null,   // 探针回传的选择器计数
+ *   composer?: object|null,                   // 05b-composer 返回
+ *   input?: object|null,                      // 05-input 返回
+ *   send?: object|null,                       // 06-send 返回
+ *   skill?: object|null,                      // 04-skill 返回
+ *   images?: Array<object>|null,              // 07-collect 返回的图片候选
+ * }} [overrides]
+ */
+async function makeVariantPage(overrides = {}) {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-variant-'));
+  const calls = [];
+  const baseline = 'https://p3.doubao.com/rc_gen_image/baseline.png';
+  const chrome = {
+    calls,
     async ensureDaemon() {},
-    async ensurePage() { return { pageId: 3, url: 'https://www.doubao.com/chat/' }; },
+    async ensurePage() {
+      return { pageId: 9, url: 'https://www.doubao.com/chat/' };
+    },
     async evaluate(name) {
+      calls.push(name);
       if (name === '01-probe') {
         return {
           status: 'succeeded',
           isLoggedIn: true,
           pageUrl: 'https://www.doubao.com/chat/abc',
           pageTitle: '豆包',
-          // 已登录但页面骨架（workspaceChip / newConversation）全为 0 —— 典型改版
-          contract: { loginButton: 0, loginModal: 0, inputEditor: 0, sendButton: 0, skillButton: 0 },
-          images: [],
+          ...(overrides.contract ? { contract: overrides.contract } : {}),
+          images: [{ src: baseline, naturalWidth: 1080, naturalHeight: 1080 }],
         };
       }
-      return { ok: true };
-    },
-    async screenshot() {},
-    async stop() {},
-  };
-  const result = await executeDoubaoAction(
-    { mode: 'generate', prompt: '一只猫', config: normalizeConfig({}) },
-    { chrome: drifted, history: [] },
-  );
-  assert.equal(result.status, 'failed');
-  assert.equal(result.code, 'contract_changed');
-  assert.deepEqual(result.details.missingSelectors, ['workspaceChip', 'newConversation']);
-});
-
-test('G17b: 对话打开后输入区漂移也返回 contract_changed', async () => {
-  const composerDrift = {
-    async ensureDaemon() {},
-    async ensurePage() { return { pageId: 4, url: 'https://www.doubao.com/chat/' }; },
-    async evaluate(name) {
-      if (name === '01-probe') {
-        return {
-          isLoggedIn: true,
-          pageUrl: 'https://www.doubao.com/chat/abc',
-          pageTitle: '豆包',
-          contract: { workspaceChip: 1, newConversation: 1, inputEditor: 0, sendButton: 0 },
-          images: [],
-        };
+      if (name === '04-skill') {
+        return overrides.skill ?? { ok: true, clicked: true, hasLoginModal: false };
       }
       if (name === '05b-composer') {
-        return { ok: false, contract: { inputEditor: 0, sendButton: 0 } };
+        return overrides.composer ?? { ok: true, contract: { inputEditor: 1, sendButton: 0 } };
       }
+      if (name === '05-input') {
+        return overrides.input ?? { ok: true, field: 'prosemirror', inserted: true, textLength: 20 };
+      }
+      if (name === '06-send') return overrides.send ?? { ok: true, via: 'button' };
+      if (name.startsWith('07-collect')) {
+        return {
+          status: 'succeeded',
+          hasLoginModal: false,
+          pageUrl: 'https://www.doubao.com/chat/abc',
+          images: overrides.images ?? [
+            {
+              src: 'https://p3.doubao.com/rc_gen_image/freshhash.png~wm0.png',
+              naturalWidth: 2048,
+              naturalHeight: 2048,
+            },
+          ],
+        };
+      }
+      if (name.startsWith('dom-dump-')) {
+        return {
+          ok: true,
+          pageUrl: 'https://www.doubao.com/chat/abc',
+          pageTitle: '豆包',
+          html: '<html><body><div data-testid="chat_input_input"></div></body></html>',
+          htmlLength: 71,
+          truncated: false,
+        };
+      }
+      if (name === '08-tail-text') return { tailText: '豆包页面正在生成…' };
       return { ok: true };
     },
-    async screenshot() {},
+    async screenshot(filePath) {
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+      return 'ok';
+    },
     async stop() {},
   };
-  const result = await executeDoubaoAction(
-    { mode: 'generate', prompt: '一只猫', config: normalizeConfig({}) },
-    { chrome: composerDrift, history: [] },
-  );
-  assert.equal(result.status, 'failed');
-  assert.equal(result.code, 'contract_changed');
-  assert.deepEqual(result.details.missingSelectors, ['inputEditor']);
+  const fetchImage = async () => ({
+    ok: true,
+    headers: { get: () => 'image/webp' },
+    arrayBuffer: async () => Uint8Array.from([0x52, 0x49, 0x46, 0x46]).buffer,
+  });
+  const run = async () =>
+    executeDoubaoAction(
+      {
+        mode: 'generate',
+        prompt: '一只哈基米',
+        aspectRatio: '1:1',
+        style: 'photorealistic',
+        maxImages: 1,
+        config: normalizeConfig({ outputDir: dir, timeoutMs: 8000, keepTab: true, attachImages: false }),
+      },
+      { chrome, fetchImage, history: [], cwd: dir },
+    );
+  return { dir, chrome, run };
+}
+
+test('G17: 骨架 soft 缺失只降级不 fail-fast；发送失败才报 send_not_ready（P1+L2）', async () => {
+  const page = await makeVariantPage({
+    // 工作区 chip / 新建会话 / 技能按钮都不见了 —— 旧版这里直接 contract_changed
+    contract: {
+      loginButton: 0,
+      loginModal: 0,
+      workspaceChip: 0,
+      newConversation: 0,
+      workMode: 0,
+      skillButton: 0,
+      inputEditor: 1,
+      sendButton: 0,
+    },
+    send: { ok: false, reason: 'neither_button_nor_editor' },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, 'send_not_ready');
+    assert.match(result.message, /第 4 步（提交指令）失败：发送按钮不可用/);
+    assert.deepEqual(result.degraded, [
+      'loginButton',
+      'loginModal',
+      'workMode',
+      'workspaceChip',
+      'newConversation',
+      'skillButton',
+    ]);
+    // P2：失败取证落在 runDir，结果里只带指针不带 HTML
+    assert.equal(result.details.step, '06-send');
+    assert.equal(result.details.reason, 'send_not_ready');
+    assert.match(result.details.artifacts.dom, /dom-06-send\.html$/);
+    assert.equal(result.details.evidence?.html, undefined);
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
+});
+
+test('G17b: 对话打开后输入区漂移也返回 contract_changed（hard 契约）', async () => {
+  const page = await makeVariantPage({
+    contract: { workspaceChip: 1, newConversation: 1, inputEditor: 1, sendButton: 0 },
+    composer: { ok: false, contract: { inputEditor: 0, sendButton: 0 } },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, 'contract_changed');
+    assert.deepEqual(result.details.missingSelectors, ['inputEditor']);
+    assert.equal(result.details.step, '05-input');
+    assert.match(result.message, /第 3 步（写入提示词）失败：输入框未找到/);
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
+});
+
+test('G32a: 技能按钮 testid 改版 → 仍能出图，降级记 skillButton', async () => {
+  const page = await makeVariantPage({
+    contract: {
+      loginButton: 0,
+      loginModal: 0,
+      workspaceChip: 1,
+      newConversation: 1,
+      workMode: 0,
+      skillButton: 0,
+      inputEditor: 1,
+      sendButton: 1,
+    },
+    skill: { ok: false, clicked: false, hasLoginModal: false },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'succeeded');
+    assert.equal(result.code, 'ok');
+    assert.deepEqual(result.degraded, ['loginButton', 'loginModal', 'workMode', 'skillButton']);
+    assert.equal(result.imageCount, 1);
+    assert.ok(path.resolve(result.images[0].filePath).startsWith(path.resolve(page.dir)));
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
+});
+
+test('G32b: 删掉工作区 chip → 仍能出图，degraded 含 workspaceChip', async () => {
+  const page = await makeVariantPage({
+    contract: {
+      loginButton: 0,
+      loginModal: 0,
+      workspaceChip: 0,
+      newConversation: 0,
+      workMode: 0,
+      skillButton: 1,
+      inputEditor: 1,
+      sendButton: 1,
+    },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'succeeded');
+    assert.deepEqual(result.degraded, ['loginButton', 'loginModal', 'workMode', 'workspaceChip', 'newConversation']);
+    assert.ok(!result.degraded.includes('skillButton'));
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
+});
+
+test('G32c: 输入区退回纯 textarea → 仍能出图', async () => {
+  const page = await makeVariantPage({
+    contract: {
+      loginButton: 0,
+      loginModal: 0,
+      workspaceChip: 1,
+      newConversation: 1,
+      workMode: 0,
+      skillButton: 1,
+      inputEditor: 1,
+      sendButton: 1,
+    },
+    input: { ok: true, field: 'textarea', inserted: true, textLength: 20, matches: true },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'succeeded');
+    assert.equal(result.imageCount, 1);
+    assert.ok(page.chrome.calls.includes('05-input'));
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
+});
+
+test('G32d: 输入框与发送按钮一起消失 → contract_changed + dom-05-input.html 落盘', async () => {
+  const page = await makeVariantPage({
+    contract: {
+      loginButton: 0,
+      loginModal: 0,
+      workspaceChip: 1,
+      newConversation: 1,
+      workMode: 0,
+      skillButton: 1,
+      inputEditor: 0,
+      sendButton: 0,
+    },
+    composer: { ok: false, contract: { inputEditor: 0, sendButton: 0 } },
+  });
+  try {
+    const result = await page.run();
+    assert.equal(result.status, 'failed');
+    assert.equal(result.code, 'contract_changed');
+    const domPath = result.details.artifacts.dom;
+    assert.match(domPath, /dom-05-input\.html$/);
+    const html = await readFile(domPath, 'utf8');
+    assert.match(html, /chat_input_input/);
+    const contractJson = JSON.parse(await readFile(result.details.artifacts.contract, 'utf8'));
+    assert.equal(contractJson.step, '05-input');
+    assert.equal(contractJson.contract.inputEditor, 0);
+    const pageUrlText = await readFile(result.details.artifacts.pageUrl, 'utf8');
+    assert.match(pageUrlText, /doubao\.com\/chat/);
+  } finally {
+    await rm(page.dir, { recursive: true, force: true });
+  }
 });
 
 test('G18：history 持久化（落盘 / 读回 / 坏 JSON / 合并去重 / 上限）', async () => {
@@ -2022,3 +2310,646 @@ test('G28：清除只删指定工作区的记录与本地文件', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// ── G29 关闭单张图片（缩略图悬浮删除按钮的后端语义） ────────────────────────
+test('G29：单张删除只删目标记录与本地文件，未知目标 404 且不动任何文件', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-clear-one-'));
+  const wsA = 'D:\\work\\proj-a';
+  const wsB = 'D:\\work\\proj-b';
+  const fileA1 = path.join(dir, 'doubao_a1.png');
+  const fileA2 = path.join(dir, 'doubao_a2.png');
+  const fileB1 = path.join(dir, 'doubao_b1.png');
+  const fileGone = path.join(dir, 'doubao_gone.png');
+  try {
+    for (const file of [fileA1, fileA2, fileB1]) await writeFile(file, 'png');
+    await saveHistory(dir, [
+      { filePath: fileB1, filename: 'doubao_b1.png', workspace: wsB },
+      { filePath: fileA1, filename: 'doubao_a1.png', workspace: wsA, attachment: { attachmentId: 'att-a1' } },
+      { filePath: fileA2, filename: 'doubao_a2.png', workspace: wsA, attachment: { attachmentId: 'att-a2' } },
+      { filePath: fileGone, filename: 'doubao_gone.png', workspace: wsA },
+    ]);
+
+    const { ctx, registered } = makeFakeHostCtx();
+    apply(ctx, { outputDir: dir });
+    const clearRoute = registered.routes.find((route) => route.path === '/doubao-paint/clear');
+    assert.ok(clearRoute, '单张删除复用 /doubao-paint/clear');
+    const diskPaths = async () => (await loadHistory(dir)).map((item) => item.filePath);
+
+    // 未知 id：404，且一张记录/一个文件都不动
+    const unknown = await callClearRoute(clearRoute, 'POST', { id: 'no-such-image' });
+    assert.equal(unknown.code, 404);
+    assert.equal(unknown.body.ok, false);
+    assert.equal(unknown.body.removed, 0);
+    assert.equal(existsSync(fileA1), true);
+    assert.equal((await diskPaths()).includes(fileA1), true, '未知目标不得删记录');
+
+    // filePath 优先于 id：同一次请求里给一个别的文件名，也不能多删一张
+    const first = await callClearRoute(clearRoute, 'POST', {
+      filePath: fileA1,
+      id: 'doubao_a2.png',
+      currentWorkspace: wsA,
+    });
+    assert.equal(first.code, 200);
+    assert.equal(first.body.ok, true);
+    assert.equal(first.body.removed, 1);
+    assert.equal(first.body.filesRemoved, 1);
+    assert.equal(first.body.workspace, wsA);
+    assert.equal(existsSync(fileA1), false);
+    assert.equal(existsSync(fileA2), true, '同组其它图片必须保留');
+    assert.equal(existsSync(fileB1), true, '其它工作区必须保留');
+    assert.equal((await diskPaths()).includes(fileA2), true, 'filePath 必须优先，不能按 id 误删第二张');
+    const wsAGroup = first.body.groups.find((group) => String(group.key) === wsA);
+    assert.ok(wsAGroup, '删除后仍返回该工作区分组');
+    assert.equal(wsAGroup.count, 2, 'wsA 从 3 张降到 2 张');
+
+    // id 命中附件 id 同样可以删单张
+    const byAttachment = await callClearRoute(clearRoute, 'POST', { id: 'att-a2' });
+    assert.equal(byAttachment.code, 200);
+    assert.equal(byAttachment.body.removed, 1);
+    assert.equal(byAttachment.body.filesRemoved, 1);
+    assert.equal(existsSync(fileA2), false);
+
+    // 文件已被手动删掉：记录照样清掉，不得抛错（filesRemoved 为 0）
+    const gone = await callClearRoute(clearRoute, 'POST', { id: 'doubao_gone.png' });
+    assert.equal(gone.code, 200);
+    assert.equal(gone.body.removed, 1);
+    assert.equal(gone.body.filesRemoved, 0);
+    assert.equal((await diskPaths()).includes(fileGone), false);
+
+    // 落盘只剩 wsB 那条（本次临时目录内）
+    assert.equal((await diskPaths()).includes(fileB1), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── G30 面板通道工作区归属：sessionId → 会话 header.cwd ───────────────────────
+async function callStatusRoute(route, url) {
+  const result = {};
+  await route.handler(
+    { url, on: () => {} },
+    {
+      writeHead: (code, headers) => {
+        result.code = code;
+        result.headers = headers;
+      },
+      end: (body) => {
+        result.body = body ? JSON.parse(body) : undefined;
+      },
+    },
+  );
+  return result;
+}
+
+/** 假宿主：额外提供 sessionPersistence.stat(id) → { header: { cwd } }，unknown 会抛错。 */
+function makeSessionHostCtx(cwdBySession) {
+  const { ctx, registered } = makeFakeHostCtx();
+  const statCalls = [];
+  const baseGet = ctx.get;
+  ctx.get = (key) => {
+    if (key === 'sessionPersistence') {
+      return {
+        stat: async (id) => {
+          statCalls.push(id);
+          if (!Object.prototype.hasOwnProperty.call(cwdBySession, id)) {
+            throw new Error('unknown session: ' + id);
+          }
+          return { header: { id, cwd: cwdBySession[id] } };
+        },
+      };
+    }
+    return baseGet(key);
+  };
+  return { ctx, registered, statCalls };
+}
+
+test('G30：面板通道只带 sessionId 时按会话 header.cwd 归组，并矫正被进程 cwd 兜底误标的存量记录', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-panel-ws-'));
+  const sessionId = 'session-panel-fixture';
+  const sessionCwd = 'D:\\work\\proj-a';
+  const fallbackCwd = process.cwd();
+  const filePanel = path.join(dir, 'doubao_panel.png');
+  const fileLegacy = path.join(dir, 'doubao_legacy.png');
+  try {
+    await writeFile(filePanel, 'png');
+    await writeFile(fileLegacy, 'png');
+    // 复刻真机 .history.json：同一会话里，面板通道那条被兜底标成 profile 目录，
+    // 工具通道那条是对的（真机：desktop vs dsh-doubao-paint）。
+    await saveHistory(dir, [
+      { filePath: filePanel, filename: 'doubao_panel.png', workspace: fallbackCwd, sessionId },
+      { filePath: fileLegacy, filename: 'doubao_legacy.png', workspace: sessionCwd, sessionId },
+    ]);
+
+    const { ctx, registered } = makeSessionHostCtx({ [sessionId]: sessionCwd });
+    apply(ctx, { outputDir: dir });
+    const statusRoute = registered.routes.find((route) => route.path === '/doubao-paint/status');
+    assert.ok(statusRoute, '必须注册 /doubao-paint/status');
+
+    const panel = await callStatusRoute(statusRoute, '/doubao-paint/status?sessionId=' + encodeURIComponent(sessionId));
+    assert.equal(panel.code === 200 || panel.code === 503, true);
+    assert.equal(panel.body.workspace, sessionCwd, '工作区必须由 sessionId 反查会话 header.cwd');
+    assert.equal(panel.body.workspaceSource, 'session');
+
+    const own = panel.body.groups.filter((group) => String(group.key) === sessionCwd);
+    assert.equal(own.length, 1, '当前工作区只有一个分组');
+    assert.equal(own[0].current, true, '「当前工作区」标签必须显示（此前 current=false 的 bug）');
+    assert.equal(own[0].label, 'proj-a');
+    assert.equal(own[0].count >= 2, true, '两条记录都归到当前工作区');
+    const fallbackGroups = panel.body.groups.filter((group) => String(group.key) === fallbackCwd);
+    assert.deepEqual(fallbackGroups, [], '不能再出现进程 cwd（desktop）分组');
+
+    const panelFiles = (own[0].images || []).filter((item) => item.filename === path.basename(filePanel) || item.filename === path.basename(fileLegacy));
+    assert.equal(panelFiles.length, 2, '一条记录都不能丢');
+    assert.equal(panelFiles.every((item) => item.workspace === sessionCwd), true, '误标记录按会话归位');
+
+    // 归位写回磁盘：后续 hydrate/清除看到同一份归属
+    const onDisk = (await loadHistory(dir)).filter((item) => item.filename === path.basename(filePanel) || item.filename === path.basename(fileLegacy));
+    assert.equal(onDisk.length, 2);
+    assert.equal(onDisk.every((item) => item.workspace === sessionCwd), true);
+
+    // 显式 ?workspace 仍然优先（会话内 cd 之后前端能给出更精确的路径）
+    const explicit = await callStatusRoute(
+      statusRoute,
+      '/doubao-paint/status?workspace=' + encodeURIComponent(sessionCwd + '\\design') + '&sessionId=' + encodeURIComponent(sessionId),
+    );
+    assert.equal(explicit.body.workspace, sessionCwd + '\\design');
+    assert.equal(explicit.body.workspaceSource, 'request');
+
+    // 会话已删除时回落：解析不到就退回空串（不要让 stat 的异常冒到路由）
+    const orphan = await callStatusRoute(statusRoute, '/doubao-paint/status?sessionId=session-gone');
+    assert.equal(orphan.body.workspace, '');
+    assert.equal(orphan.body.workspaceSource, 'none');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ── G31 工作区矫正的边界：只动「进程 cwd 兜底」记录 ──────────────────────────
+test('G31：工作区矫正只动进程 cwd 兜底记录，cd 子目录 / 未知会话 / 其它工作区保持原样', async () => {
+  const fallback = process.cwd();
+  const sessionCwd = 'D:\\work\\proj-a';
+  const subdir = path.join(sessionCwd, 'design');
+  const records = [
+    { filename: 'cd-subdir.png', workspace: subdir, sessionId: 'session-a' },
+    { filename: 'unknown-session.png', workspace: '', sessionId: 'session-missing' },
+    { filename: 'other-workspace.png', workspace: 'D:\\work\\proj-b', sessionId: 'session-a' },
+    { filename: 'fallback-hit.png', workspace: fallback, sessionId: 'session-a' },
+    { filename: 'no-session.png', workspace: fallback, sessionId: '' },
+  ];
+
+  const { ctx } = makeSessionHostCtx({ 'session-a': sessionCwd });
+  assert.equal(await resolveWorkspaceBySessionId(ctx, 'session-a'), sessionCwd);
+  assert.equal(await resolveWorkspaceBySessionId(ctx, 'session-missing'), '', '未知会话不抛错');
+  assert.equal(await resolveWorkspaceBySessionId({}, 'session-a'), '');
+  assert.deepEqual(await resolveRequestWorkspace(ctx, { sessionId: 'session-a' }), {
+    workspace: sessionCwd,
+    source: 'session',
+  });
+  assert.deepEqual(await resolveRequestWorkspace(ctx, { workspace: '  D:\\work\\proj-z  ', sessionId: 'session-a' }), {
+    workspace: 'D:\\work\\proj-z',
+    source: 'request',
+  });
+  assert.deepEqual(await resolveRequestWorkspace(makeFakeHostCtx().ctx, { sessionId: 'session-a' }), {
+    workspace: '',
+    source: 'none',
+  });
+
+  const index = new Map([['session-a', sessionCwd]]);
+  const repaired = repairFallbackWorkspace(records, index, [fallback]);
+  assert.notEqual(repaired, records, '有命中时必须返回新数组');
+  assert.equal(repaired.length, records.length, '不得增删记录');
+  assert.equal(repaired[0].workspace, subdir, 'cd 到子目录生成的记录不能被改写');
+  assert.equal(repaired[1].workspace, '', '未知会话的记录保持原样');
+  assert.equal(repaired[2].workspace, 'D:\\work\\proj-b', '其它工作区记录不动');
+  assert.equal(repaired[3].workspace, sessionCwd, '被进程 cwd 兜底误标的记录归位到会话工作区');
+  assert.equal(repaired[4].workspace, fallback, '没有 sessionId 的记录无法反查，保持原样');
+  assert.equal(records[3].workspace, fallback, '入参不被就地改写');
+
+  const untouched = records.slice(0, 3);
+  assert.equal(repairFallbackWorkspace(untouched, index, [fallback]), untouched, '无命中时原样返回同一引用');
+  assert.equal(repairFallbackWorkspace(records, new Map(), [fallback]), records, '没有会话索引时不做事');
+  assert.equal(repairFallbackWorkspace(records, index, []), records, '没有兜底候选时不做事');
+});
+
+// ── G33 预览灯箱（点击缩略图放大） ───────────────────────────────────────────
+test('G33：点击缩略图打开灯箱预览，×/引用路径不触发，Esc 与箭头可用', async () => {
+  const source = await readFile(new URL('../lib/client.js', import.meta.url), 'utf8');
+  const listeners = new Map();
+  let confirmAnswer = true;
+  let clearResponse = { ok: true, groups: [] };
+  const windowStub = {
+    addEventListener: (type, handler) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(handler);
+    },
+    removeEventListener: (type, handler) => {
+      const set = listeners.get(type);
+      if (set) set.delete(handler);
+    },
+    dispatchEvent: () => true,
+    confirm: () => confirmAnswer,
+  };
+  const sandbox = {
+    window: windowStub,
+    setTimeout,
+    clearTimeout,
+    queueMicrotask,
+    console,
+    URL,
+    URLSearchParams,
+    AbortController,
+    fetch: async () => ({ ok: true, json: async () => clearResponse }),
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(source, sandbox, { filename: 'client.js' });
+
+  // 带状态的 hook 桩：同一次 render 内按调用顺序分配槽位，便于模拟点击后的重渲染
+  const states = [];
+  const effectSlots = [];
+  let hookIndex = 0;
+  let currentEffects = [];
+  const React = {
+    createElement: () => null,
+    useState: (initial) => {
+      const index = hookIndex++;
+      if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
+      const setState = (value) => {
+        states[index] = typeof value === 'function' ? value(states[index]) : value;
+      };
+      return [states[index], setState];
+    },
+    useEffect: (fn, deps) => {
+      currentEffects.push({ slot: hookIndex++, fn, deps });
+    },
+    useLayoutEffect: () => {},
+    useMemo: (fn) => fn(),
+    useCallback: (fn) => fn,
+    useRef: (initial) => ({ current: initial }),
+    useSyncExternalStore: (subscribe, getSnapshot) => getSnapshot(),
+    createContext: () => ({ Provider: () => null, Consumer: () => null }),
+    Fragment: 'Fragment',
+  };
+  const jsxRuntime = {
+    jsx: (type, props) => ({ type, props }),
+    jsxs: (type, props) => ({ type, props }),
+    Fragment: 'Fragment',
+  };
+  const makeStub = () =>
+    new Proxy(function () {}, {
+      get: (target, key) =>
+        key === 'then' || key === Symbol.toPrimitive ? undefined : makeStub(),
+      apply: () => makeStub(),
+    });
+  const moduleApi = sandbox.__DSH_DOUBAO_PAINT_BUILD__((id) => {
+    if (id === 'react') return React;
+    if (id === 'react/jsx-runtime') return jsxRuntime;
+    if (id === '@deepseek-ai/dsh-client-store') {
+      return {
+        useStore: (store, selector) => (selector ? selector(store.getSnapshot()) : store.getSnapshot()),
+      };
+    }
+    return makeStub();
+  });
+
+  const registeredComponents = [];
+  const clientCtx = {
+    locale: { register: () => {} },
+    effect: (fn) => fn(),
+    enableInputDock: true,
+    slots: {
+      inject: (name, fn) => fn(),
+      register: (meta, component) => registeredComponents.push(component),
+    },
+  };
+  moduleApi.apply(clientCtx);
+  const dockFactory = registeredComponents[1];
+
+  const store = moduleApi.getSessionStore('session-1');
+  if (!store.getSnapshot().expanded) store.toggleExpanded();
+
+  const images = Array.from({ length: 6 }, (_, index) => ({
+    id: `preview-${index}`,
+    filename: `preview-${index}.png`,
+    filePath: `D:\\work\\proj-a\\doubao_images\\preview-${index}.png`,
+    previewUrl: `/doubao-paint/file?path=preview-${index}.png`,
+    prompt: `提示词 ${index}`,
+    width: 2848,
+    height: 1600,
+  }));
+  const groupKey = 'D:\\work\\proj-a';
+  store.setGroups(
+    [{ key: groupKey, label: 'proj-a', count: 6, latestAt: '', current: true, images }],
+    groupKey,
+  );
+
+  const commitEffects = () => {
+    const next = currentEffects;
+    const seen = new Set();
+    next.forEach((effect) => {
+      seen.add(effect.slot);
+      const prev = effectSlots[effect.slot];
+      const changed =
+        !prev ||
+        !prev.deps ||
+        !effect.deps ||
+        prev.deps.length !== effect.deps.length ||
+        prev.deps.some((value, index) => value !== effect.deps[index]);
+      if (!changed) return;
+      if (prev && typeof prev.cleanup === 'function') prev.cleanup();
+      const cleanup = effect.fn();
+      effectSlots[effect.slot] = { deps: effect.deps, cleanup };
+    });
+    effectSlots.forEach((prev, slot) => {
+      if (seen.has(slot) || !prev || typeof prev.cleanup !== 'function') return;
+      prev.cleanup();
+      effectSlots[slot] = undefined;
+    });
+  };
+  const render = () => {
+    hookIndex = 0;
+    currentEffects = [];
+    const node = dockFactory({ sessionId: 'session-1', session: { cwd: groupKey } });
+    commitEffects();
+    return node;
+  };
+
+  const collect = (root) => {
+    const nodes = [];
+    const walk = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(walk);
+        return;
+      }
+      nodes.push(node);
+      if (node.props) walk(node.props.children);
+    };
+    walk(root);
+    return nodes;
+  };
+  const textOf = (root) =>
+    collect(root)
+      .map((node) => (node.props ? node.props.children : undefined))
+      .filter((value) => typeof value === 'string')
+      .join('|');
+  const byClass = (nodes, className) =>
+    nodes.filter((node) => node.props && node.props.className === className);
+  const findMask = (nodes) => byClass(nodes, 'dsh-dbimg-preview-mask')[0];
+
+  let dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '默认不渲染预览浮层');
+  const cards = () => byClass(collect(dock), 'dsh-dbimg-card');
+  assert.equal(cards().length, 6);
+
+  // 1) 卡片带点击入口，且不改变卡片原有的两个角标/浮层子结构
+  for (const [index, card] of cards().entries()) {
+    assert.equal(typeof card.props.onClick, 'function', '缩略图卡片必须可点击打开预览');
+    assert.equal(card.props['data-dsh-doubao-open-preview'], index, '卡片携带组内下标');
+  }
+
+  // 2) 点第一张 → 浮层结构齐备
+  cards()[0].props.onClick();
+  dock = render();
+  let nodes = collect(dock);
+  const mask = findMask(nodes);
+  assert.ok(mask, '点击缩略图必须渲染预览浮层');
+  assert.equal(mask.props['data-dsh-doubao-preview'], groupKey);
+  const previewImg = byClass(nodes, 'dsh-dbimg-preview-img');
+  assert.equal(previewImg.length, 1, '浮层里只有一张大图');
+  assert.equal(previewImg[0].type, 'img');
+  assert.equal(previewImg[0].props.src, images[0].previewUrl, '大图打开的是被点的这张');
+  assert.equal(byClass(nodes, 'dsh-dbimg-preview-stage').length, 1);
+  assert.equal(byClass(nodes, 'dsh-dbimg-preview-info').length, 1);
+  const navs = () => byClass(collect(dock), 'dsh-dbimg-preview-nav');
+  assert.equal(navs().length, 2, '左右各一个切换箭头');
+  assert.equal(navs()[0].props.disabled, true, '第一张时「上一张」禁用，不循环');
+  assert.equal(navs()[1].props.disabled, false);
+  const closeBtn = byClass(nodes, 'dsh-dbimg-preview-close')[0];
+  assert.ok(closeBtn, '浮层要有右上角关闭按钮');
+  assert.equal(closeBtn.props.children, '×');
+  assert.equal(closeBtn.props['aria-label'], '关闭预览');
+  assert.equal(closeBtn.props['data-dsh-doubao-preview-close'], '1');
+  assert.equal(typeof closeBtn.props.onClick, 'function');
+  const infoText = textOf(mask);
+  assert.match(infoText, /提示词 0/, '信息行显示提示词');
+  assert.match(infoText, /2848×1600/, '信息行显示尺寸');
+  assert.match(infoText, /preview-0\.png/, '信息行显示文件名');
+  assert.equal(byClass(nodes, 'dsh-dbimg-preview-prompt').length, 1);
+  assert.equal(byClass(nodes, 'dsh-dbimg-preview-meta').length, 1);
+  assert.ok(
+    nodes.some((node) => node.props && node.props['data-dsh-doubao-preview-remove'] === '1'),
+    '浮层内保留删除入口',
+  );
+  assert.ok(
+    nodes.some((node) => node.props && node.props['data-dsh-doubao-preview-quote'] === '1'),
+    '浮层内保留引用路径入口',
+  );
+
+  // 3) 键盘监听只在预览打开时挂载
+  assert.equal((listeners.get('keydown') || new Set()).size, 1, '打开预览即挂载 keydown');
+
+  // 4) 左右切换：→ 前进、← 到头保持第一张
+  navs()[1].props.onClick({ stopPropagation: () => {} });
+  dock = render();
+  assert.equal(
+    byClass(collect(dock), 'dsh-dbimg-preview-img')[0].props.src,
+    images[1].previewUrl,
+  );
+  assert.equal(navs()[0].props.disabled, false, '第二张起「上一张」可用');
+  navs()[0].props.onClick({ stopPropagation: () => {} });
+  dock = render();
+  navs()[0].props.onClick({ stopPropagation: () => {} });
+  dock = render();
+  assert.equal(
+    byClass(collect(dock), 'dsh-dbimg-preview-img')[0].props.src,
+    images[0].previewUrl,
+    '到边界后不再往前翻',
+  );
+  assert.equal(navs()[0].props.disabled, true);
+
+  // 5) Esc 关闭 + 解绑
+  const keydown = Array.from(listeners.get('keydown') || [])[0];
+  assert.equal(typeof keydown, 'function');
+  let prevented = false;
+  keydown({ key: 'Escape', preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true, 'Esc 必须 preventDefault');
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, 'Esc 关闭浮层');
+  assert.equal((listeners.get('keydown') || new Set()).size, 0, '关闭后解绑 keydown');
+
+  // 6) 遮罩空白处点击关闭
+  cards()[2].props.onClick();
+  dock = render();
+  findMask(collect(dock)).props.onClick({});
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '点遮罩空白处关闭浮层');
+
+  // 7) 预览内「引用路径」不关闭、不冒泡；缩略图「×」与「引用路径」不打开预览
+  cards()[3].props.onClick();
+  dock = render();
+  nodes = collect(dock);
+  const quoteInside = nodes.find(
+    (node) => node.props && node.props['data-dsh-doubao-preview-quote'] === '1',
+  );
+  let stopped = false;
+  quoteInside.props.onClick({ stopPropagation: () => { stopped = true; } });
+  assert.equal(stopped, true, '浮层内按钮必须阻止冒泡到遮罩（否则点一下就被关掉）');
+  dock = render();
+  assert.ok(findMask(collect(dock)), '点浮层内「引用路径」后浮层仍在');
+  byClass(collect(dock), 'dsh-dbimg-preview-close')[0].props.onClick({
+    stopPropagation: () => {},
+  });
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '点浮层内「×」关闭浮层');
+
+  nodes = collect(dock);
+  const thumbs = byClass(nodes, 'dsh-dbimg-card');
+  const quoteThumb = byClass(nodes, 'dsh-dbimg-mini-btn')[0];
+  stopped = false;
+  quoteThumb.props.onClick({ stopPropagation: () => { stopped = true; } });
+  assert.equal(stopped, true, '缩略图「引用路径」必须阻止冒泡');
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '点「引用路径」不得打开预览');
+
+  const closeThumb = byClass(collect(dock), 'dsh-dbimg-card-close')[0];
+  stopped = false;
+  closeThumb.props.onClick({ stopPropagation: () => { stopped = true; } });
+  assert.equal(stopped, true, '缩略图「×」必须阻止冒泡');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '点「×」不得打开预览');
+  assert.equal(thumbs.length, 6);
+
+  // 8) 预览内删除后跟随刷新：删掉当前图，预览落到同组下一张
+  clearResponse = { ok: true, workspace: groupKey, removed: 1, groups: [
+    { key: groupKey, label: 'proj-a', count: 5, images: images.slice(1) },
+  ] };
+  const remaining = images.slice(1);
+  store.setGroups([{ key: groupKey, label: 'proj-a', count: 6, images }], groupKey);
+  dock = render();
+  cards()[0].props.onClick();
+  dock = render();
+  nodes = collect(dock);
+  const removeInside = nodes.find(
+    (node) => node.props && node.props['data-dsh-doubao-preview-remove'] === '1',
+  );
+  assert.equal(typeof removeInside.props.onClick, 'function');
+  removeInside.props.onClick({ stopPropagation: () => {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  dock = render();
+  nodes = collect(dock);
+  const afterDelete = findMask(nodes);
+  assert.ok(afterDelete, '删掉一张后浮层仍打开（还有图）');
+  assert.equal(
+    byClass(nodes, 'dsh-dbimg-preview-img')[0].props.src,
+    remaining[0].previewUrl,
+    '删除后预览指向同组下一张',
+  );
+
+  // 9) 删掉最后一张 → 浮层自动关闭
+  clearResponse = { ok: true, workspace: groupKey, removed: 1, groups: [] };
+  store.setGroups([{ key: groupKey, label: 'proj-a', count: 1, images: [remaining[0]] }], groupKey);
+  dock = render();
+  cards()[0].props.onClick();
+  dock = render();
+  const lastRemove = collect(dock).find(
+    (node) => node.props && node.props['data-dsh-doubao-preview-remove'] === '1',
+  );
+  lastRemove.props.onClick({ stopPropagation: () => {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  dock = render();
+  assert.equal(findMask(collect(dock)), undefined, '删掉最后一张后浮层自动关闭');
+  assert.equal((listeners.get('keydown') || new Set()).size, 0, '关闭后不留键盘监听');
+});
+
+// ── G34 取证只对真实动作模式落盘（t8：status 轮询不再产生 doubao-status-* 噪音） ──
+test('G34：status 模式失败不落盘（只回契约计数），generate 失败仍写 dom-<step>.html', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'doubao-evidence-'));
+  const runsDir = path.join(dir, '.runs');
+  const contractCounts = {
+    loginButton: 1,
+    loginModal: 0,
+    workMode: 1,
+    workspaceChip: 0,
+    newConversation: 1,
+    skillButton: 1,
+    inputEditor: 1,
+    sendButton: 1,
+  };
+  // 浏览器脚本在 01-probe 直接抛错（宿主里 status 轮询失败的典型形态）
+  const failingChrome = {
+    async ensureDaemon() {},
+    async ensurePage() {
+      return { pageId: 7, url: 'https://www.doubao.com/chat/' };
+    },
+    async evaluate(name) {
+      if (name === '00-wait-ready') return { ok: true };
+      if (name === '01-probe') {
+        throw new Error('evaluate failed: target closed');
+      }
+      if (name.startsWith('dom-dump-')) {
+        return {
+          ok: true,
+          pageUrl: 'https://www.doubao.com/chat/abc',
+          pageTitle: '豆包',
+          html: '<html><body><div id="chat_input_input"></div></body></html>',
+          htmlLength: 57,
+          truncated: false,
+        };
+      }
+      return { ok: true };
+    },
+    async screenshot() {
+      return 'ok';
+    },
+    async stop() {},
+  };
+  const fetchImage = async () => ({
+    ok: true,
+    headers: { get: () => 'image/webp' },
+    arrayBuffer: async () => Uint8Array.from([0x52, 0x49, 0x46, 0x46]).buffer,
+  });
+  const config = normalizeConfig({ outputDir: dir, timeoutMs: 8000, keepTab: true, attachImages: false });
+
+  try {
+    // 1) status（纯查询）：失败也不许落盘、不许建 runDir，只把契约计数带回响应体
+    const statusResult = await executeDoubaoAction(
+      { mode: 'status', config },
+      { chrome: failingChrome, fetchImage, history: [], cwd: dir },
+    );
+    assert.equal(statusResult.status, 'failed');
+    assert.equal(statusResult.details?.skipped, 'mode:status', '查询模式取证必须被跳过');
+    assert.deepEqual(statusResult.details?.artifacts, { dom: null, pageUrl: null, contract: null });
+    assert.equal(statusResult.details?.step, '01-probe');
+    assert.equal(existsSync(runsDir), false, 'status 失败不得新建 .runs 目录（噪音来源）');
+    assert.deepEqual((await readdirSafe(dir)) , [], '.runs 不存在时临时目录里不应多出任何取证文件');
+
+    // 2) generate（真实动作）：同样的失败必须把现场写进 runDir
+    const genResult = await executeDoubaoAction(
+      { mode: 'generate', prompt: '一只哈基米', maxImages: 1, config },
+      { chrome: failingChrome, fetchImage, history: [], cwd: dir },
+    );
+    assert.equal(genResult.status, 'failed');
+    assert.equal(genResult.details?.step, '01-probe');
+    assert.equal(genResult.details?.skipped, undefined, '动作模式不得走 skipped 分支');
+    const savedRuns = await readdirSafe(runsDir);
+    assert.equal(savedRuns.length, 1, 'generate 失败恰好产生一个 runDir');
+    const runDir = path.join(runsDir, savedRuns[0]);
+    const domPath = genResult.details?.artifacts?.dom;
+    assert.equal(path.dirname(domPath), runDir);
+    assert.match(path.basename(domPath), /^dom-01-probe\.html$/);
+    const domStat = await stat(domPath);
+    assert.ok(domStat.size > 0, 'dom-<step>.html 必须真落盘');
+    assert.deepEqual((await readdirSafe(runDir)).sort(), ['contract.json', 'dom-01-probe.html', 'page-url.txt']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function readdirSafe(target) {
+  try {
+    return await readdir(target);
+  } catch {
+    return [];
+  }
+}

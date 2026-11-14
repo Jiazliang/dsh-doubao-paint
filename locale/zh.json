@@ -1,11 +1,11 @@
 {
   "meta": {
-    "title": "豆包网页生图 Agent 工具",
+    "title": "豆包生图 Agent 工具",
     "description": "向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生工具，优先用本机 ego lite（复用已登录 Profile 1）操控豆包网页版（doubao.com）提交生图提示词、选择比例与风格、自动优选 wm0 无水印 2.7K 超清原图落盘并作为多模态图像附件返回；ego 不可用时回落本机 Chrome（chrome-devtools-mcp CLI）。"
   },
   "config": {
     "enabled": {
-      "title": "启用豆包网页生图工具插件",
+      "title": "启用豆包生图工具插件",
       "description": "开启后向 Agent 注册 doubao_generate_image 与 doubao_image_status 原生生图工具。"
     },
     "browserBackend": {
@@ -46,7 +46,11 @@
     },
     "injectSystemPrompt": {
       "title": "向 System Prompt 注入生图工具指引",
-      "description": "开启后向 Agent 系统提示词注入豆包网页生图工具使用说明，使模型在收到画图请求时优先自动调用。"
+      "description": "开启后向 Agent 系统提示词注入豆包生图工具使用说明，使模型在收到画图请求时优先自动调用。"
+    },
+    "attachImages": {
+      "title": "出图后把图片作为对话附件注入",
+      "description": "开启后生成的图片会作为附件出现在对话里；关闭后只在工具卡中显示缩略图，需要原图可打开保存目录。"
     }
   }
 }

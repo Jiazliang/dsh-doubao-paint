@@ -47,6 +47,10 @@
     "injectSystemPrompt": {
       "title": "Inject System Prompt Guidance",
       "description": "Injects usage guidance into the Agent system prompt so the model automatically invokes doubao_generate_image when asked to draw."
+    },
+    "attachImages": {
+      "title": "Attach Generated Images to the Chat",
+      "description": "When enabled, generated images appear in the conversation as attachments; when disabled, only thumbnails show in the tool card."
     }
   }
 }
