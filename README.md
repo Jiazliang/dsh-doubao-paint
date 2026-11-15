@@ -4,7 +4,7 @@
 
 用本机浏览器操控豆包网页版生成图片：下载高清原图（通常 2848×1600、无水印源）、放进对话附件、存到输出目录，并把结果同时呈现在会话、工具图卡和输入框下方的面板里。
 
-- 版本 **1.5.0** · 离线测试 **43 项** · 冒烟 **13 项**
+- 版本 **1.5.1** · 离线测试 **43 项** · 冒烟 **13 项**
 - 浏览器后端：优先本机 **ego lite**，没有则用 **Chrome + chrome-devtools-mcp**
 - 已真机跑通：`/doubao-paint <描述>` → 补全提示词 → 生图 → 落盘 + 附件 + 面板记录
 
@@ -14,10 +14,10 @@
 
 ```text
 # A. GitHub 直装（推荐，可换版本号或 ref）
-action=install_bundle, target=github:Jiazliang/dsh-doubao-paint#v1.5.0
+action=install_bundle, target=github:Jiazliang/dsh-doubao-paint#v1.5.1
 
 # B. Release 包（离线可传阅）
-action=install_bundle, target=https://github.com/Jiazliang/dsh-doubao-paint/releases/download/v1.5.0/dsh-doubao-paint-1.5.0.tgz
+action=install_bundle, target=https://github.com/Jiazliang/dsh-doubao-paint/releases/download/v1.5.1/dsh-doubao-paint-1.5.1.tgz
 ```
 
 装完重启 DSH，然后首次登录豆包：
